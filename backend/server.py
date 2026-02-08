@@ -932,7 +932,7 @@ async def import_linkedin(request: LinkedInImportRequest, current_user: dict = D
 
 @api_router.get("/")
 async def root():
-    return {"message": "ResumeAI API", "version": "1.0.0"}
+    return {"message": "Profolio API", "version": "1.0.0"}
 
 # Include router and middleware
 app.include_router(api_router)
