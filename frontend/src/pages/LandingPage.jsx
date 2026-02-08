@@ -38,7 +38,7 @@ const LandingPage = () => {
     {
       name: "Sarah Chen",
       role: "Software Engineer at Google",
-      content: "ResumeAI helped me land my dream job. The ATS optimization was a game-changer!",
+      content: "Profolio helped me land my dream job. The ATS optimization was a game-changer!",
       avatar: "SC"
     },
     {
@@ -65,7 +65,7 @@ const LandingPage = () => {
               <FileText className="w-5 h-5 text-white" />
             </div>
             <span className="text-xl font-bold text-[#0F172A]" style={{ fontFamily: 'Outfit, sans-serif' }}>
-              ResumeAI
+              Profolio
             </span>
           </Link>
           
@@ -438,7 +438,7 @@ const LandingPage = () => {
               Ready to Land Your Dream Job?
             </h2>
             <p className="text-xl text-white/80 mb-8">
-              Join thousands of professionals who've accelerated their career with ResumeAI
+              Join thousands of professionals who've accelerated their career with Profolio
             </p>
             <Link to="/register">
               <Button 
@@ -463,7 +463,7 @@ const LandingPage = () => {
                 <FileText className="w-4 h-4 text-white" />
               </div>
               <span className="text-lg font-bold text-white" style={{ fontFamily: 'Outfit, sans-serif' }}>
-                ResumeAI
+                Profolio
               </span>
             </div>
             <div className="flex items-center gap-6 text-slate-400 text-sm">
@@ -472,7 +472,7 @@ const LandingPage = () => {
               <a href="#" className="hover:text-white transition-colors">Support</a>
             </div>
             <p className="text-slate-400 text-sm">
-              © 2024 ResumeAI. All rights reserved.
+              © 2024 Profolio. All rights reserved.
             </p>
           </div>
         </div>
