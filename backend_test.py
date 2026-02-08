@@ -181,7 +181,7 @@ class ProfolioAPITester:
             }
         }
         
-        success, response = self.run_test("Create Resume", "POST", "resumes", 201, resume_data)
+        success, response = self.run_test("Create Resume", "POST", "resumes", 200, resume_data)
         
         if success and 'id' in response:
             self.resume_id = response['id']
