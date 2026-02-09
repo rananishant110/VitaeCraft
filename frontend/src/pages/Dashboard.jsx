@@ -167,6 +167,97 @@ const Dashboard = () => {
     }
   };
 
+  const openShareDialog = async (resume) => {
+    setSelectedResumeForShare(resume);
+    setShareDialogOpen(true);
+    setShareInfo(null);
+    setSharePassword("");
+    setCustomSlug("");
+    
+    // Check if already shared
+    try {
+      const response = await fetch(`${API}/resumes/${resume.id}/share`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (response.ok) {
+        const data = await response.json();
+        if (data.shared) {
+          setShareInfo(data);
+        }
+      }
+    } catch (error) {
+      console.error("Failed to get share info");
+    }
+  };
+
+  const createShareLink = async () => {
+    if (!selectedResumeForShare) return;
+    setCreatingShare(true);
+    
+    try {
+      const response = await fetch(`${API}/resumes/${selectedResumeForShare.id}/share`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          resume_id: selectedResumeForShare.id,
+          custom_slug: customSlug || undefined,
+          password: sharePassword || undefined,
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        const frontend_url = window.location.origin;
+        setShareInfo({
+          ...data,
+          shared: true,
+          public_url: `${frontend_url}/r/${data.slug}`
+        });
+        toast.success("Share link created!");
+      } else {
+        const error = await response.json();
+        toast.error(error.detail || "Failed to create share link");
+      }
+    } catch (error) {
+      toast.error("Failed to create share link");
+    } finally {
+      setCreatingShare(false);
+    }
+  };
+
+  const removeShareLink = async () => {
+    if (!selectedResumeForShare) return;
+    
+    try {
+      const response = await fetch(`${API}/resumes/${selectedResumeForShare.id}/share`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      if (response.ok) {
+        setShareInfo(null);
+        toast.success("Share link removed");
+      }
+    } catch (error) {
+      toast.error("Failed to remove share link");
+    }
+  };
+
+  const copyShareLink = () => {
+    if (shareInfo?.public_url) {
+      navigator.clipboard.writeText(shareInfo.public_url);
+      toast.success("Link copied to clipboard!");
+    }
+  };
+
+  const handleThemeToggle = () => {
+    toggleTheme();
+    saveThemeToBackend(theme === "light" ? "dark" : "light", token, API);
+  };
+
   const getATSScoreColor = (score) => {
     if (!score) return "bg-slate-100 text-slate-600";
     if (score >= 80) return "bg-emerald-100 text-emerald-700";
