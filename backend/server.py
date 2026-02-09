@@ -244,6 +244,35 @@ class PaymentRequest(BaseModel):
 class LinkedInImportRequest(BaseModel):
     linkedin_url: str
 
+# P3 Feature Models
+class UserPreferencesUpdate(BaseModel):
+    theme: Optional[str] = None  # "light" or "dark"
+
+class PublicResumeCreate(BaseModel):
+    resume_id: str
+    custom_slug: Optional[str] = None
+    password: Optional[str] = None
+
+class PublicResumeResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str
+    resume_id: str
+    user_id: str
+    slug: str
+    is_password_protected: bool
+    view_count: int
+    created_at: str
+
+class ResumeAnalyticsResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    resume_id: str
+    title: str
+    view_count: int
+    download_count: int
+    ats_score_history: List[Dict[str, Any]]
+    last_viewed: Optional[str] = None
+    last_downloaded: Optional[str] = None
+
 # Pricing
 PRICING = {
     "early_bird": 9.99,
