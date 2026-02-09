@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { Toaster } from "./components/ui/sonner";
 import { useState, useEffect, createContext, useContext } from "react";
+import { ThemeProvider } from "./contexts/ThemeContext";
 
 // Pages
 import LandingPage from "./pages/LandingPage";
@@ -15,6 +16,7 @@ import ForgotPassword from "./pages/ForgotPassword";
 import ResetPassword from "./pages/ResetPassword";
 import Settings from "./pages/Settings";
 import CoverLetterBuilder from "./pages/CoverLetterBuilder";
+import PublicResume from "./pages/PublicResume";
 
 // Context
 const AuthContext = createContext(null);
@@ -128,37 +130,40 @@ function App() {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-[#FDFDFD]">
+      <div className="min-h-screen flex items-center justify-center bg-[#FDFDFD] dark:bg-slate-900">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#002FA7]"></div>
       </div>
     );
   }
 
   return (
-    <AuthContext.Provider value={{ user, token, login, register, logout, refreshUser, API }}>
-      <div className="App">
-        <BrowserRouter>
-          <Routes>
-            {/* Public Routes */}
-            <Route path="/" element={<LandingPage />} />
-            <Route path="/login" element={token ? <Navigate to="/dashboard" /> : <LoginPage />} />
-            <Route path="/register" element={token ? <Navigate to="/dashboard" /> : <RegisterPage />} />
-            <Route path="/pricing" element={<PricingPage />} />
-            <Route path="/verify-email" element={<VerifyEmail />} />
-            <Route path="/forgot-password" element={<ForgotPassword />} />
-            <Route path="/reset-password" element={<ResetPassword />} />
-            
-            {/* Protected Routes */}
-            <Route path="/payment-success" element={<ProtectedRoute><PaymentSuccess /></ProtectedRoute>} />
-            <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
-            <Route path="/builder/:id?" element={<ProtectedRoute><ResumeBuilder /></ProtectedRoute>} />
-            <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
-            <Route path="/cover-letter/:id?" element={<ProtectedRoute><CoverLetterBuilder /></ProtectedRoute>} />
-          </Routes>
-        </BrowserRouter>
-        <Toaster position="top-right" richColors />
-      </div>
-    </AuthContext.Provider>
+    <ThemeProvider>
+      <AuthContext.Provider value={{ user, token, login, register, logout, refreshUser, API }}>
+        <div className="App">
+          <BrowserRouter>
+            <Routes>
+              {/* Public Routes */}
+              <Route path="/" element={<LandingPage />} />
+              <Route path="/login" element={token ? <Navigate to="/dashboard" /> : <LoginPage />} />
+              <Route path="/register" element={token ? <Navigate to="/dashboard" /> : <RegisterPage />} />
+              <Route path="/pricing" element={<PricingPage />} />
+              <Route path="/verify-email" element={<VerifyEmail />} />
+              <Route path="/forgot-password" element={<ForgotPassword />} />
+              <Route path="/reset-password" element={<ResetPassword />} />
+              <Route path="/r/:slug" element={<PublicResume />} />
+              
+              {/* Protected Routes */}
+              <Route path="/payment-success" element={<ProtectedRoute><PaymentSuccess /></ProtectedRoute>} />
+              <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
+              <Route path="/builder/:id?" element={<ProtectedRoute><ResumeBuilder /></ProtectedRoute>} />
+              <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
+              <Route path="/cover-letter/:id?" element={<ProtectedRoute><CoverLetterBuilder /></ProtectedRoute>} />
+            </Routes>
+          </BrowserRouter>
+          <Toaster position="top-right" richColors />
+        </div>
+      </AuthContext.Provider>
+    </ThemeProvider>
   );
 }
 
