@@ -501,16 +501,22 @@ class VitaeCraftAPITester:
     def run_all_tests(self):
         """Run all backend tests"""
         print("=" * 60)
-        print("🚀 PROFOLIO BACKEND API TESTING")
+        print("🚀 VITAECRAFT BACKEND API TESTING (P1/P2 Features)")
         print("=" * 60)
         
         # Basic API tests
         self.test_root_endpoint()
         
-        # Authentication tests
-        self.test_user_registration()
+        # Authentication tests (P1/P2 features)
+        self.test_user_registration_with_verification()
         self.test_user_login()
         self.test_get_user_profile()
+        self.test_forgot_password()
+        self.test_resend_verification()
+        
+        # Profile management (P1/P2 features)
+        self.test_update_profile()
+        self.test_change_password()
         
         # Resume CRUD tests
         self.test_create_resume()
@@ -518,19 +524,31 @@ class VitaeCraftAPITester:
         self.test_get_single_resume()
         self.test_update_resume()
         
+        # Resume P1/P2 features
+        self.test_duplicate_resume()
+        self.test_resume_versions()
+        
         # PDF generation test
         self.test_pdf_generation()
+        
+        # Cover Letter CRUD (P1/P2 features)
+        self.test_create_cover_letter()
+        self.test_get_cover_letters()
+        self.test_update_cover_letter()
+        
+        # AI features tests (P1/P2 - without premium, should fail)
+        self.test_ai_generate_summary_without_premium()
+        self.test_ai_suggest_skills_without_premium()
+        self.test_ai_generate_cover_letter_without_premium()
         
         # Payment tests
         self.test_payment_checkout()
         
-        # LinkedIn import test
+        # LinkedIn import test (mocked)
         self.test_linkedin_import()
         
-        # AI features test (without premium)
-        self.test_ai_features_without_premium()
-        
         # Cleanup
+        self.test_delete_cover_letter()
         self.test_delete_resume()
         
         # Print summary
