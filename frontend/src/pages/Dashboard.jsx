@@ -64,6 +64,20 @@ const Dashboard = () => {
     }
   };
 
+  const fetchAnalytics = async () => {
+    try {
+      const response = await fetch(`${API}/analytics/dashboard`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setAnalytics(data);
+      }
+    } catch (error) {
+      console.error("Failed to fetch analytics");
+    }
+  };
+
   const createNewResume = async () => {
     try {
       const response = await fetch(`${API}/resumes`, {
