@@ -386,10 +386,19 @@ const Dashboard = () => {
                           <Edit className="w-4 h-4 mr-2" />
                           Edit
                         </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => duplicateResume(resume.id)} className="cursor-pointer">
+                          <Copy className="w-4 h-4 mr-2" />
+                          Duplicate
+                        </DropdownMenuItem>
                         <DropdownMenuItem onClick={() => downloadPDF(resume.id, resume.title)} className="cursor-pointer">
                           <Download className="w-4 h-4 mr-2" />
                           Download PDF
                         </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => navigate(`/cover-letter?resume=${resume.id}`)} className="cursor-pointer">
+                          <Mail className="w-4 h-4 mr-2" />
+                          Create Cover Letter
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
                         <DropdownMenuItem onClick={() => deleteResume(resume.id)} className="text-red-600 cursor-pointer">
                           <Trash2 className="w-4 h-4 mr-2" />
                           Delete
