@@ -49,7 +49,7 @@ const LoginPage = () => {
               <FileText className="w-5 h-5 text-white" />
             </div>
             <span className="text-xl font-bold text-[#0F172A]" style={{ fontFamily: 'Outfit, sans-serif' }}>
-              Profolio
+              VitaeCraft
             </span>
           </Link>
 

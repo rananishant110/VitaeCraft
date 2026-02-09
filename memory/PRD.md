@@ -1,4 +1,4 @@
-# Profolio - AI-Powered Resume Builder
+# VitaeCraft - AI-Powered Resume Builder
 
 ## Original Problem Statement
 Build a full stack web app for resume creation in PDF format, where user can update their skills, experience and other details and they can download a PDF out of it. The app should be capable to tailor the resume for ATS and use methodologies like STAR to update and prepare the resume smartly for the user. App should have one time lifetime subscription for $9.99 as early offer and later $49.99 for lifetime.

@@ -73,7 +73,7 @@ const PricingPage = () => {
               <FileText className="w-5 h-5 text-white" />
             </div>
             <span className="text-xl font-bold text-[#0F172A]" style={{ fontFamily: 'Outfit, sans-serif' }}>
-              Profolio
+              VitaeCraft
             </span>
           </Link>
 
@@ -278,7 +278,7 @@ const PricingPage = () => {
       {/* Footer */}
       <footer className="py-8 px-6 border-t border-slate-200">
         <div className="max-w-7xl mx-auto text-center text-sm text-[#64748B]">
-          <p>© 2024 Profolio. All rights reserved.</p>
+          <p>© 2024 VitaeCraft. All rights reserved.</p>
         </div>
       </footer>
     </div>

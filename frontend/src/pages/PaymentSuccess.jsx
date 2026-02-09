@@ -79,7 +79,7 @@ const PaymentSuccess = () => {
             <FileText className="w-6 h-6 text-white" />
           </div>
           <span className="text-2xl font-bold text-[#0F172A]" style={{ fontFamily: 'Outfit, sans-serif' }}>
-            Profolio
+            VitaeCraft
           </span>
         </Link>
 
@@ -128,7 +128,7 @@ const PaymentSuccess = () => {
                 Payment Successful!
               </h1>
               <p className="text-[#64748B] mb-6">
-                Welcome to Profolio Premium! You now have access to all AI-powered features.
+                Welcome to VitaeCraft Premium! You now have access to all AI-powered features.
               </p>
 
               <div className="bg-gradient-to-r from-[#002FA7] to-[#FF4F00] p-4 rounded-xl mb-6">
