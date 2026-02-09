@@ -1493,11 +1493,274 @@ async def import_linkedin(request: LinkedInImportRequest, current_user: dict = D
         "is_mocked": True
     }
 
+# ============== P3: USER PREFERENCES (DARK MODE) ==============
+
+@api_router.get("/user/preferences")
+async def get_user_preferences(current_user: dict = Depends(get_current_user)):
+    """Get user preferences including theme"""
+    prefs = await db.user_preferences.find_one({"user_id": current_user["id"]}, {"_id": 0})
+    if not prefs:
+        prefs = {"user_id": current_user["id"], "theme": "light"}
+    return prefs
+
+@api_router.put("/user/preferences")
+async def update_user_preferences(data: UserPreferencesUpdate, current_user: dict = Depends(get_current_user)):
+    """Update user preferences (theme, etc.)"""
+    update_data = {}
+    if data.theme:
+        if data.theme not in ["light", "dark"]:
+            raise HTTPException(status_code=400, detail="Theme must be 'light' or 'dark'")
+        update_data["theme"] = data.theme
+    
+    if update_data:
+        await db.user_preferences.update_one(
+            {"user_id": current_user["id"]},
+            {"$set": update_data},
+            upsert=True
+        )
+    
+    prefs = await db.user_preferences.find_one({"user_id": current_user["id"]}, {"_id": 0})
+    return prefs
+
+# ============== P3: RESUME ANALYTICS ==============
+
+@api_router.get("/resumes/{resume_id}/analytics", response_model=ResumeAnalyticsResponse)
+async def get_resume_analytics(resume_id: str, current_user: dict = Depends(get_current_user)):
+    """Get analytics for a specific resume"""
+    resume = await db.resumes.find_one({"id": resume_id, "user_id": current_user["id"]}, {"_id": 0})
+    if not resume:
+        raise HTTPException(status_code=404, detail="Resume not found")
+    
+    analytics = await db.resume_analytics.find_one({"resume_id": resume_id}, {"_id": 0})
+    if not analytics:
+        analytics = {
+            "resume_id": resume_id,
+            "title": resume["title"],
+            "view_count": 0,
+            "download_count": 0,
+            "ats_score_history": [],
+            "last_viewed": None,
+            "last_downloaded": None
+        }
+    else:
+        analytics["title"] = resume["title"]
+    
+    return analytics
+
+@api_router.get("/analytics/dashboard")
+async def get_analytics_dashboard(current_user: dict = Depends(get_current_user)):
+    """Get analytics overview for all user's resumes"""
+    resumes = await db.resumes.find(
+        {"user_id": current_user["id"]},
+        {"_id": 0, "id": 1, "title": 1}
+    ).to_list(100)
+    
+    analytics_list = []
+    total_views = 0
+    total_downloads = 0
+    
+    for resume in resumes:
+        analytics = await db.resume_analytics.find_one({"resume_id": resume["id"]}, {"_id": 0})
+        if analytics:
+            analytics["title"] = resume["title"]
+            total_views += analytics.get("view_count", 0)
+            total_downloads += analytics.get("download_count", 0)
+        else:
+            analytics = {
+                "resume_id": resume["id"],
+                "title": resume["title"],
+                "view_count": 0,
+                "download_count": 0
+            }
+        analytics_list.append(analytics)
+    
+    return {
+        "total_resumes": len(resumes),
+        "total_views": total_views,
+        "total_downloads": total_downloads,
+        "resumes": analytics_list
+    }
+
+async def track_resume_event(resume_id: str, event_type: str, ats_score: int = None):
+    """Helper to track resume events"""
+    now = datetime.now(timezone.utc).isoformat()
+    
+    update_ops = {}
+    if event_type == "view":
+        update_ops = {
+            "$inc": {"view_count": 1},
+            "$set": {"last_viewed": now}
+        }
+    elif event_type == "download":
+        update_ops = {
+            "$inc": {"download_count": 1},
+            "$set": {"last_downloaded": now}
+        }
+    elif event_type == "ats_score" and ats_score is not None:
+        update_ops = {
+            "$push": {"ats_score_history": {"score": ats_score, "date": now}}
+        }
+    
+    if update_ops:
+        await db.resume_analytics.update_one(
+            {"resume_id": resume_id},
+            {**update_ops, "$setOnInsert": {"resume_id": resume_id}},
+            upsert=True
+        )
+
+# ============== P3: PUBLIC RESUME SHARING ==============
+
+@api_router.post("/resumes/{resume_id}/share", response_model=PublicResumeResponse)
+async def create_public_share(resume_id: str, data: PublicResumeCreate, current_user: dict = Depends(get_current_user)):
+    """Create a public shareable link for a resume"""
+    resume = await db.resumes.find_one({"id": resume_id, "user_id": current_user["id"]})
+    if not resume:
+        raise HTTPException(status_code=404, detail="Resume not found")
+    
+    # Check if share already exists
+    existing = await db.public_resumes.find_one({"resume_id": resume_id})
+    if existing:
+        raise HTTPException(status_code=400, detail="Resume already has a public link. Delete it first to create a new one.")
+    
+    # Generate slug
+    if data.custom_slug:
+        # Validate custom slug
+        if len(data.custom_slug) < 3 or len(data.custom_slug) > 50:
+            raise HTTPException(status_code=400, detail="Slug must be 3-50 characters")
+        slug = data.custom_slug.lower().replace(" ", "-")
+        # Check uniqueness
+        slug_exists = await db.public_resumes.find_one({"slug": slug})
+        if slug_exists:
+            raise HTTPException(status_code=400, detail="This slug is already taken")
+    else:
+        slug = secrets.token_urlsafe(8)
+    
+    share_doc = {
+        "id": str(uuid.uuid4()),
+        "resume_id": resume_id,
+        "user_id": current_user["id"],
+        "slug": slug,
+        "password_hash": get_password_hash(data.password) if data.password else None,
+        "is_password_protected": bool(data.password),
+        "view_count": 0,
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    
+    await db.public_resumes.insert_one(share_doc)
+    
+    return PublicResumeResponse(
+        id=share_doc["id"],
+        resume_id=resume_id,
+        user_id=current_user["id"],
+        slug=slug,
+        is_password_protected=share_doc["is_password_protected"],
+        view_count=0,
+        created_at=share_doc["created_at"]
+    )
+
+@api_router.get("/resumes/{resume_id}/share")
+async def get_share_info(resume_id: str, current_user: dict = Depends(get_current_user)):
+    """Get public share info for a resume"""
+    resume = await db.resumes.find_one({"id": resume_id, "user_id": current_user["id"]})
+    if not resume:
+        raise HTTPException(status_code=404, detail="Resume not found")
+    
+    share = await db.public_resumes.find_one({"resume_id": resume_id}, {"_id": 0, "password_hash": 0})
+    if not share:
+        return {"shared": False}
+    
+    frontend_url = os.environ.get('FRONTEND_URL', 'http://localhost:3000')
+    share["shared"] = True
+    share["public_url"] = f"{frontend_url}/r/{share['slug']}"
+    return share
+
+@api_router.delete("/resumes/{resume_id}/share")
+async def delete_public_share(resume_id: str, current_user: dict = Depends(get_current_user)):
+    """Remove public sharing for a resume"""
+    resume = await db.resumes.find_one({"id": resume_id, "user_id": current_user["id"]})
+    if not resume:
+        raise HTTPException(status_code=404, detail="Resume not found")
+    
+    result = await db.public_resumes.delete_one({"resume_id": resume_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="No public link found")
+    
+    return {"message": "Public link removed"}
+
+@api_router.get("/public/resume/{slug}")
+async def get_public_resume(slug: str, password: str = None):
+    """View a public resume (no auth required)"""
+    share = await db.public_resumes.find_one({"slug": slug})
+    if not share:
+        raise HTTPException(status_code=404, detail="Resume not found")
+    
+    # Check password if protected
+    if share.get("is_password_protected"):
+        if not password:
+            return {"password_required": True}
+        if not verify_password(password, share["password_hash"]):
+            raise HTTPException(status_code=401, detail="Invalid password")
+    
+    resume = await db.resumes.find_one({"id": share["resume_id"]}, {"_id": 0})
+    if not resume:
+        raise HTTPException(status_code=404, detail="Resume not found")
+    
+    # Track view
+    await db.public_resumes.update_one(
+        {"slug": slug},
+        {"$inc": {"view_count": 1}}
+    )
+    await track_resume_event(share["resume_id"], "view")
+    
+    # Return resume data (excluding user_id for privacy)
+    return {
+        "title": resume["title"],
+        "template": resume["template"],
+        "data": resume["data"]
+    }
+
+@api_router.get("/public/resume/{slug}/pdf")
+async def get_public_resume_pdf(slug: str, password: str = None):
+    """Download public resume as PDF"""
+    share = await db.public_resumes.find_one({"slug": slug})
+    if not share:
+        raise HTTPException(status_code=404, detail="Resume not found")
+    
+    if share.get("is_password_protected"):
+        if not password:
+            raise HTTPException(status_code=401, detail="Password required")
+        if not verify_password(password, share["password_hash"]):
+            raise HTTPException(status_code=401, detail="Invalid password")
+    
+    resume = await db.resumes.find_one({"id": share["resume_id"]}, {"_id": 0})
+    if not resume:
+        raise HTTPException(status_code=404, detail="Resume not found")
+    
+    template = resume.get('template', 'professional')
+    
+    if template == 'modern':
+        pdf_buffer = generate_modern_pdf(resume)
+    elif template == 'minimalist':
+        pdf_buffer = generate_minimalist_pdf(resume)
+    else:
+        pdf_buffer = generate_professional_pdf(resume)
+    
+    # Track download
+    await track_resume_event(share["resume_id"], "download")
+    
+    filename = f"{resume.get('title', 'resume').replace(' ', '_')}.pdf"
+    
+    return StreamingResponse(
+        pdf_buffer,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+
 # ============== ROOT ROUTE ==============
 
 @api_router.get("/")
 async def root():
-    return {"message": "VitaeCraft API", "version": "1.0.0"}
+    return {"message": "VitaeCraft API", "version": "1.1.0"}
 
 # Include router and middleware
 app.include_router(api_router)
