@@ -10,7 +10,7 @@ import {
   FileText, Plus, MoreVertical, Download, Edit, Trash2, 
   Crown, LogOut, User, Sparkles, Target, Clock, Settings,
   Mail, Copy, History, Share2, Moon, Sun, Link as LinkIcon, 
-  BarChart3, Eye, ExternalLink
+  BarChart3, Eye, ExternalLink, Lock
 } from "lucide-react";
 import {
   DropdownMenu,
