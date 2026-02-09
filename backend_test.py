@@ -685,7 +685,7 @@ class VitaeCraftAPITester:
     def run_all_tests(self):
         """Run all backend tests"""
         print("=" * 60)
-        print("🚀 VITAECRAFT BACKEND API TESTING (P1/P2 Features)")
+        print("🚀 VITAECRAFT BACKEND API TESTING (P1/P2/P3 Features)")
         print("=" * 60)
         
         # Basic API tests
@@ -730,6 +730,26 @@ class VitaeCraftAPITester:
         
         # LinkedIn import test (mocked)
         self.test_linkedin_import()
+        
+        # ============== P3 FEATURES TESTS ==============
+        print("\n" + "=" * 40)
+        print("🌟 P3 FEATURES TESTING")
+        print("=" * 40)
+        
+        # User preferences (Dark mode)
+        self.test_get_user_preferences()
+        self.test_update_user_preferences()
+        
+        # Resume analytics
+        self.test_analytics_dashboard()
+        self.test_resume_analytics()
+        
+        # Public resume sharing
+        self.test_create_public_share()
+        self.test_get_share_info()
+        self.test_view_public_resume_with_password()
+        self.test_download_public_resume_pdf()
+        self.test_delete_public_share()
         
         # Cleanup
         self.test_delete_cover_letter()
