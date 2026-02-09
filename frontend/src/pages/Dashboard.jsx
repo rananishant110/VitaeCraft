@@ -2,12 +2,15 @@ import { useState, useEffect } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import { useAuth } from "../App";
+import { useTheme } from "../contexts/ThemeContext";
 import { Button } from "../components/ui/button";
+import { Input } from "../components/ui/input";
 import { toast } from "sonner";
 import { 
   FileText, Plus, MoreVertical, Download, Edit, Trash2, 
   Crown, LogOut, User, Sparkles, Target, Clock, Settings,
-  Mail, Copy, History
+  Mail, Copy, History, Share2, Moon, Sun, Link as LinkIcon, 
+  BarChart3, Eye, ExternalLink
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -16,15 +19,33 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "../components/ui/dropdown-menu";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+  DialogFooter,
+} from "../components/ui/dialog";
 
 const Dashboard = () => {
   const { user, token, logout, API } = useAuth();
+  const { theme, toggleTheme, saveThemeToBackend } = useTheme();
   const navigate = useNavigate();
   const [resumes, setResumes] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [shareDialogOpen, setShareDialogOpen] = useState(false);
+  const [selectedResumeForShare, setSelectedResumeForShare] = useState(null);
+  const [shareInfo, setShareInfo] = useState(null);
+  const [sharePassword, setSharePassword] = useState("");
+  const [customSlug, setCustomSlug] = useState("");
+  const [creatingShare, setCreatingShare] = useState(false);
+  const [analytics, setAnalytics] = useState(null);
 
   useEffect(() => {
     fetchResumes();
+    fetchAnalytics();
   }, []);
 
   const fetchResumes = async () => {
