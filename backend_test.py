@@ -490,6 +490,189 @@ class VitaeCraftAPITester:
         success, response = self.run_test("Delete Cover Letter", "DELETE", f"cover-letters/{self.cover_letter_id}", 200)
         return success
 
+    # ============== P3 FEATURES TESTS ==============
+    
+    def test_get_user_preferences(self):
+        """Test getting user preferences (P3 - Dark Mode)"""
+        if not self.token:
+            self.log_result("Get User Preferences", False, "No token available")
+            return False
+            
+        success, response = self.run_test("Get User Preferences", "GET", "user/preferences", 200)
+        
+        if success and 'theme' in response:
+            print(f"   ✓ User preferences retrieved: theme={response.get('theme', 'light')}")
+            return True
+        return False
+
+    def test_update_user_preferences(self):
+        """Test updating user preferences (P3 - Dark Mode)"""
+        if not self.token:
+            self.log_result("Update User Preferences", False, "No token available")
+            return False
+            
+        # Test updating theme to dark
+        preferences_data = {
+            "theme": "dark"
+        }
+        
+        success, response = self.run_test("Update User Preferences (Dark)", "PUT", "user/preferences", 200, preferences_data)
+        
+        if success and response.get('theme') == 'dark':
+            print(f"   ✓ Theme updated to dark mode")
+            
+            # Test updating back to light
+            light_data = {"theme": "light"}
+            success2, response2 = self.run_test("Update User Preferences (Light)", "PUT", "user/preferences", 200, light_data)
+            
+            if success2 and response2.get('theme') == 'light':
+                print(f"   ✓ Theme updated back to light mode")
+                return True
+        return False
+
+    def test_analytics_dashboard(self):
+        """Test analytics dashboard (P3 - Resume Analytics)"""
+        if not self.token:
+            self.log_result("Analytics Dashboard", False, "No token available")
+            return False
+            
+        success, response = self.run_test("Analytics Dashboard", "GET", "analytics/dashboard", 200)
+        
+        if success and 'total_resumes' in response and 'total_views' in response:
+            print(f"   ✓ Analytics dashboard: {response.get('total_resumes', 0)} resumes, {response.get('total_views', 0)} views")
+            return True
+        return False
+
+    def test_resume_analytics(self):
+        """Test individual resume analytics (P3 - Resume Analytics)"""
+        if not self.token or not self.resume_id:
+            self.log_result("Resume Analytics", False, "No token or resume ID available")
+            return False
+            
+        success, response = self.run_test("Resume Analytics", "GET", f"resumes/{self.resume_id}/analytics", 200)
+        
+        if success and 'view_count' in response and 'download_count' in response:
+            print(f"   ✓ Resume analytics: {response.get('view_count', 0)} views, {response.get('download_count', 0)} downloads")
+            return True
+        return False
+
+    def test_create_public_share(self):
+        """Test creating public share link (P3 - Public Resume Sharing)"""
+        if not self.token or not self.resume_id:
+            self.log_result("Create Public Share", False, "No token or resume ID available")
+            return False
+            
+        share_data = {
+            "resume_id": self.resume_id,
+            "custom_slug": f"test-resume-{uuid.uuid4().hex[:8]}",
+            "password": "testpass123"
+        }
+        
+        success, response = self.run_test("Create Public Share", "POST", f"resumes/{self.resume_id}/share", 200, share_data)
+        
+        if success and 'slug' in response and 'is_password_protected' in response:
+            self.public_slug = response['slug']
+            print(f"   ✓ Public share created: slug={self.public_slug}, password_protected={response['is_password_protected']}")
+            return True
+        return False
+
+    def test_get_share_info(self):
+        """Test getting share info (P3 - Public Resume Sharing)"""
+        if not self.token or not self.resume_id:
+            self.log_result("Get Share Info", False, "No token or resume ID available")
+            return False
+            
+        success, response = self.run_test("Get Share Info", "GET", f"resumes/{self.resume_id}/share", 200)
+        
+        if success and response.get('shared') == True and 'public_url' in response:
+            print(f"   ✓ Share info retrieved: {response['public_url']}")
+            return True
+        return False
+
+    def test_view_public_resume_with_password(self):
+        """Test viewing public resume with password (P3 - Public Resume Sharing)"""
+        if not hasattr(self, 'public_slug'):
+            self.log_result("View Public Resume", False, "No public slug available")
+            return False
+            
+        # Test without password (should require password)
+        url = f"{self.base_url}/public/resume/{self.public_slug}"
+        
+        print(f"\n🔍 Testing View Public Resume (Password Required)...")
+        print(f"   URL: {url}")
+        
+        try:
+            response = requests.get(url, timeout=30)
+            
+            if response.status_code == 200:
+                data = response.json()
+                if data.get('password_required') == True:
+                    self.log_result("View Public Resume (Password Required)", True)
+                    print(f"   ✓ Password protection working correctly")
+                    
+                    # Test with password
+                    url_with_password = f"{url}?password=testpass123"
+                    response2 = requests.get(url_with_password, timeout=30)
+                    
+                    if response2.status_code == 200:
+                        data2 = response2.json()
+                        if 'data' in data2 and 'title' in data2:
+                            self.log_result("View Public Resume (With Password)", True)
+                            print(f"   ✓ Public resume accessed with password: {data2['title']}")
+                            return True
+                    
+                    self.log_result("View Public Resume (With Password)", False, f"Failed to access with password: {response2.status_code}")
+                    return False
+                else:
+                    self.log_result("View Public Resume (Password Required)", False, "Password protection not working")
+                    return False
+            else:
+                self.log_result("View Public Resume (Password Required)", False, f"Unexpected status: {response.status_code}")
+                return False
+                
+        except Exception as e:
+            self.log_result("View Public Resume (Password Required)", False, f"Exception: {str(e)}")
+            return False
+
+    def test_download_public_resume_pdf(self):
+        """Test downloading public resume PDF (P3 - Public Resume Sharing)"""
+        if not hasattr(self, 'public_slug'):
+            self.log_result("Download Public Resume PDF", False, "No public slug available")
+            return False
+            
+        url = f"{self.base_url}/public/resume/{self.public_slug}/pdf?password=testpass123"
+        
+        print(f"\n🔍 Testing Download Public Resume PDF...")
+        print(f"   URL: {url}")
+        
+        try:
+            response = requests.get(url, timeout=30)
+            
+            if response.status_code == 200 and response.headers.get('content-type') == 'application/pdf':
+                self.log_result("Download Public Resume PDF", True)
+                print(f"   ✓ Public PDF downloaded successfully ({len(response.content)} bytes)")
+                return True
+            else:
+                self.log_result("Download Public Resume PDF", False, f"Status: {response.status_code}, Content-Type: {response.headers.get('content-type')}")
+                return False
+                
+        except Exception as e:
+            self.log_result("Download Public Resume PDF", False, f"Exception: {str(e)}")
+            return False
+
+    def test_delete_public_share(self):
+        """Test deleting public share link (P3 - Public Resume Sharing)"""
+        if not self.token or not self.resume_id:
+            self.log_result("Delete Public Share", False, "No token or resume ID available")
+            return False
+            
+        success, response = self.run_test("Delete Public Share", "DELETE", f"resumes/{self.resume_id}/share", 200)
+        
+        if success:
+            print(f"   ✓ Public share link deleted")
+            return True
+        return False
+
     def test_delete_resume(self):
         """Test deleting a resume"""
         if not self.token or not self.resume_id:
