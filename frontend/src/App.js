@@ -10,6 +10,11 @@ import Dashboard from "./pages/Dashboard";
 import ResumeBuilder from "./pages/ResumeBuilder";
 import PricingPage from "./pages/PricingPage";
 import PaymentSuccess from "./pages/PaymentSuccess";
+import VerifyEmail from "./pages/VerifyEmail";
+import ForgotPassword from "./pages/ForgotPassword";
+import ResetPassword from "./pages/ResetPassword";
+import Settings from "./pages/Settings";
+import CoverLetterBuilder from "./pages/CoverLetterBuilder";
 
 // Context
 const AuthContext = createContext(null);
@@ -134,13 +139,21 @@ function App() {
       <div className="App">
         <BrowserRouter>
           <Routes>
+            {/* Public Routes */}
             <Route path="/" element={<LandingPage />} />
             <Route path="/login" element={token ? <Navigate to="/dashboard" /> : <LoginPage />} />
             <Route path="/register" element={token ? <Navigate to="/dashboard" /> : <RegisterPage />} />
             <Route path="/pricing" element={<PricingPage />} />
+            <Route path="/verify-email" element={<VerifyEmail />} />
+            <Route path="/forgot-password" element={<ForgotPassword />} />
+            <Route path="/reset-password" element={<ResetPassword />} />
+            
+            {/* Protected Routes */}
             <Route path="/payment-success" element={<ProtectedRoute><PaymentSuccess /></ProtectedRoute>} />
             <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
             <Route path="/builder/:id?" element={<ProtectedRoute><ResumeBuilder /></ProtectedRoute>} />
+            <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
+            <Route path="/cover-letter/:id?" element={<ProtectedRoute><CoverLetterBuilder /></ProtectedRoute>} />
           </Routes>
         </BrowserRouter>
         <Toaster position="top-right" richColors />
