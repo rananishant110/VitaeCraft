@@ -533,6 +533,10 @@ const Dashboard = () => {
                           <Download className="w-4 h-4 mr-2" />
                           Download PDF
                         </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => openShareDialog(resume)} className="cursor-pointer">
+                          <Share2 className="w-4 h-4 mr-2" />
+                          Share
+                        </DropdownMenuItem>
                         <DropdownMenuItem onClick={() => navigate(`/cover-letter?resume=${resume.id}`)} className="cursor-pointer">
                           <Mail className="w-4 h-4 mr-2" />
                           Create Cover Letter
@@ -547,7 +551,7 @@ const Dashboard = () => {
                   </div>
 
                   <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-1 text-xs text-[#64748B]">
+                    <div className="flex items-center gap-1 text-xs text-[#64748B] dark:text-slate-400">
                       <Clock className="w-3.5 h-3.5" />
                       {formatDate(resume.updated_at)}
                     </div>
@@ -559,7 +563,7 @@ const Dashboard = () => {
                   <Button
                     onClick={() => navigate(`/builder/${resume.id}`)}
                     variant="outline"
-                    className="w-full mt-4 border-slate-200"
+                    className="w-full mt-4 border-slate-200 dark:border-slate-600"
                     data-testid={`edit-resume-${index}`}
                   >
                     <Edit className="w-4 h-4 mr-2" />
@@ -575,17 +579,122 @@ const Dashboard = () => {
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: resumes.length * 0.05 }}
               onClick={createNewResume}
-              className="bg-slate-50 rounded-xl border-2 border-dashed border-slate-200 p-12 flex flex-col items-center justify-center hover:border-[#002FA7] hover:bg-[#002FA7]/5 transition-all cursor-pointer min-h-[280px]"
+              className="bg-slate-50 dark:bg-slate-800 rounded-xl border-2 border-dashed border-slate-200 dark:border-slate-600 p-12 flex flex-col items-center justify-center hover:border-[#002FA7] hover:bg-[#002FA7]/5 transition-all cursor-pointer min-h-[280px]"
               data-testid="new-resume-card"
             >
               <div className="w-12 h-12 bg-[#002FA7]/10 rounded-xl flex items-center justify-center mb-4">
                 <Plus className="w-6 h-6 text-[#002FA7]" />
               </div>
-              <p className="font-medium text-[#0F172A]">Create New Resume</p>
-              <p className="text-sm text-[#64748B]">Start fresh</p>
+              <p className="font-medium text-[#0F172A] dark:text-white">Create New Resume</p>
+              <p className="text-sm text-[#64748B] dark:text-slate-400">Start fresh</p>
             </motion.button>
           </div>
         )}
+
+        {/* Share Dialog */}
+        <Dialog open={shareDialogOpen} onOpenChange={setShareDialogOpen}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <Share2 className="w-5 h-5 text-[#002FA7]" />
+                Share Resume
+              </DialogTitle>
+              <DialogDescription>
+                {shareInfo?.shared 
+                  ? "Your resume is publicly accessible via the link below."
+                  : "Create a public link to share your resume with anyone."}
+              </DialogDescription>
+            </DialogHeader>
+
+            {shareInfo?.shared ? (
+              <div className="space-y-4">
+                <div className="flex items-center gap-2 p-3 bg-slate-50 dark:bg-slate-800 rounded-lg">
+                  <LinkIcon className="w-4 h-4 text-[#64748B] flex-shrink-0" />
+                  <span className="text-sm text-[#0F172A] dark:text-white truncate flex-1">
+                    {shareInfo.public_url}
+                  </span>
+                  <Button size="sm" variant="ghost" onClick={copyShareLink}>
+                    <Copy className="w-4 h-4" />
+                  </Button>
+                  <a href={shareInfo.public_url} target="_blank" rel="noopener noreferrer">
+                    <Button size="sm" variant="ghost">
+                      <ExternalLink className="w-4 h-4" />
+                    </Button>
+                  </a>
+                </div>
+
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-[#64748B]">Views</span>
+                  <span className="font-medium text-[#0F172A] dark:text-white flex items-center gap-1">
+                    <Eye className="w-4 h-4" />
+                    {shareInfo.view_count || 0}
+                  </span>
+                </div>
+
+                {shareInfo.is_password_protected && (
+                  <div className="flex items-center gap-2 text-sm text-amber-600 dark:text-amber-400">
+                    <Lock className="w-4 h-4" />
+                    Password protected
+                  </div>
+                )}
+
+                <Button 
+                  variant="outline" 
+                  onClick={removeShareLink}
+                  className="w-full text-red-600 border-red-200 hover:bg-red-50"
+                >
+                  <Trash2 className="w-4 h-4 mr-2" />
+                  Remove Public Link
+                </Button>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Custom URL (optional)</label>
+                  <Input
+                    placeholder="my-resume"
+                    value={customSlug}
+                    onChange={(e) => setCustomSlug(e.target.value)}
+                    data-testid="custom-slug-input"
+                  />
+                  <p className="text-xs text-[#64748B]">
+                    {customSlug ? `${window.location.origin}/r/${customSlug.toLowerCase().replace(/\s+/g, '-')}` : "Leave empty for random URL"}
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Password Protection (optional)</label>
+                  <Input
+                    type="password"
+                    placeholder="Enter password"
+                    value={sharePassword}
+                    onChange={(e) => setSharePassword(e.target.value)}
+                    data-testid="share-password-input"
+                  />
+                </div>
+
+                <Button 
+                  onClick={createShareLink}
+                  disabled={creatingShare}
+                  className="w-full bg-[#002FA7] hover:bg-[#002FA7]/90"
+                  data-testid="create-share-btn"
+                >
+                  {creatingShare ? (
+                    <span className="flex items-center gap-2">
+                      <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                      Creating...
+                    </span>
+                  ) : (
+                    <>
+                      <LinkIcon className="w-4 h-4 mr-2" />
+                      Create Public Link
+                    </>
+                  )}
+                </Button>
+              </div>
+            )}
+          </DialogContent>
+        </Dialog>
       </main>
     </div>
   );
