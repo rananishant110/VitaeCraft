@@ -354,19 +354,140 @@ class VitaeCraftAPITester:
             return True
         return False
 
-    def test_ai_features_without_premium(self):
-        """Test AI features without premium (should fail)"""
+    def test_duplicate_resume(self):
+        """Test resume duplication functionality"""
         if not self.token or not self.resume_id:
-            self.log_result("AI Features (No Premium)", False, "No token or resume ID available")
+            self.log_result("Duplicate Resume", False, "No token or resume ID available")
             return False
             
-        # Test STAR enhancement
-        star_data = {
-            "experience_description": "I worked on projects",
-            "role": "Software Engineer"
+        success, response = self.run_test("Duplicate Resume", "POST", f"resumes/{self.resume_id}/duplicate", 200)
+        
+        if success and 'id' in response and response['title'].endswith('(Copy)'):
+            print(f"   ✓ Resume duplicated with ID: {response['id']}")
+            print(f"   ✓ Title updated to: {response['title']}")
+            return True
+        return False
+
+    def test_resume_versions(self):
+        """Test resume version history"""
+        if not self.token or not self.resume_id:
+            self.log_result("Resume Versions", False, "No token or resume ID available")
+            return False
+            
+        success, response = self.run_test("Get Resume Versions", "GET", f"resumes/{self.resume_id}/versions", 200)
+        
+        if success and isinstance(response, list):
+            print(f"   ✓ Version history retrieved ({len(response)} versions)")
+            return True
+        return False
+
+    def test_create_cover_letter(self):
+        """Test creating a cover letter"""
+        if not self.token or not self.resume_id:
+            self.log_result("Create Cover Letter", False, "No token or resume ID available")
+            return False
+            
+        cover_letter_data = {
+            "resume_id": self.resume_id,
+            "title": "Test Cover Letter",
+            "content": "Dear Hiring Manager,\n\nI am writing to express my interest...",
+            "company_name": "Test Company",
+            "job_description": "Software Engineer position"
         }
         
-        success, response = self.run_test("STAR Enhancement (No Premium)", "POST", "ai/star-enhance", 403, star_data)
+        success, response = self.run_test("Create Cover Letter", "POST", "cover-letters", 200, cover_letter_data)
+        
+        if success and 'id' in response:
+            self.cover_letter_id = response['id']
+            print(f"   ✓ Cover letter created with ID: {self.cover_letter_id}")
+            return True
+        return False
+
+    def test_get_cover_letters(self):
+        """Test getting user's cover letters"""
+        if not self.token:
+            self.log_result("Get Cover Letters", False, "No token available")
+            return False
+            
+        success, response = self.run_test("Get Cover Letters", "GET", "cover-letters", 200)
+        
+        if success and isinstance(response, list):
+            print(f"   ✓ Cover letters retrieved ({len(response)} letters)")
+            return True
+        return False
+
+    def test_update_cover_letter(self):
+        """Test updating a cover letter"""
+        if not self.token or not self.cover_letter_id:
+            self.log_result("Update Cover Letter", False, "No token or cover letter ID available")
+            return False
+            
+        update_data = {
+            "title": "Updated Cover Letter",
+            "content": "Updated content for the cover letter"
+        }
+        
+        success, response = self.run_test("Update Cover Letter", "PUT", f"cover-letters/{self.cover_letter_id}", 200, update_data)
+        
+        if success and response.get('title') == "Updated Cover Letter":
+            print(f"   ✓ Cover letter updated successfully")
+            return True
+        return False
+
+    def test_ai_generate_summary_without_premium(self):
+        """Test AI summary generation without premium (should fail)"""
+        if not self.token:
+            self.log_result("AI Generate Summary (No Premium)", False, "No token available")
+            return False
+            
+        summary_data = {
+            "experiences": [{"company": "Test Corp", "position": "Engineer"}],
+            "skills": ["Python", "JavaScript"],
+            "target_role": "Senior Engineer",
+            "tone": "professional"
+        }
+        
+        success, response = self.run_test("AI Generate Summary (No Premium)", "POST", "ai/generate-summary", 403, summary_data)
+        return success
+
+    def test_ai_suggest_skills_without_premium(self):
+        """Test AI skills suggestion without premium (should fail)"""
+        if not self.token:
+            self.log_result("AI Suggest Skills (No Premium)", False, "No token available")
+            return False
+            
+        skills_data = {
+            "job_title": "Software Engineer",
+            "current_skills": ["Python", "JavaScript"],
+            "industry": "Technology"
+        }
+        
+        success, response = self.run_test("AI Suggest Skills (No Premium)", "POST", "ai/suggest-skills", 403, skills_data)
+        return success
+
+    def test_ai_generate_cover_letter_without_premium(self):
+        """Test AI cover letter generation without premium (should fail)"""
+        if not self.token or not self.resume_id:
+            self.log_result("AI Generate Cover Letter (No Premium)", False, "No token or resume ID available")
+            return False
+            
+        cover_letter_data = {
+            "resume_id": self.resume_id,
+            "job_description": "Software Engineer position at tech company",
+            "company_name": "Tech Corp",
+            "tone": "professional"
+        }
+        
+        success, response = self.run_test("AI Generate Cover Letter (No Premium)", "POST", "ai/generate-cover-letter", 403, cover_letter_data)
+        return success
+
+    def test_delete_cover_letter(self):
+        """Test deleting a cover letter"""
+        if not self.token or not self.cover_letter_id:
+            self.log_result("Delete Cover Letter", False, "No token or cover letter ID available")
+            return False
+            
+        success, response = self.run_test("Delete Cover Letter", "DELETE", f"cover-letters/{self.cover_letter_id}", 200)
         return success
 
     def test_delete_resume(self):
