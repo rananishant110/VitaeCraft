@@ -197,6 +197,15 @@ const Dashboard = () => {
                   )}
                 </div>
                 <DropdownMenuItem 
+                  onClick={() => navigate("/settings")} 
+                  className="cursor-pointer"
+                  data-testid="settings-btn"
+                >
+                  <Settings className="w-4 h-4 mr-2" />
+                  Settings
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem 
                   onClick={logout} 
                   className="text-red-600 cursor-pointer"
                   data-testid="logout-btn"
