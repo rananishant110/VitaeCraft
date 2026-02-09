@@ -19,6 +19,7 @@ class VitaeCraftAPITester:
         self.tests_passed = 0
         self.failed_tests = []
         self.session_id = None
+        self.public_slug = None
 
     def log_result(self, test_name, success, details=""):
         """Log test results"""
