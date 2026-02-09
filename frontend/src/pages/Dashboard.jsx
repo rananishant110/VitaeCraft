@@ -115,6 +115,23 @@ const Dashboard = () => {
     }
   };
 
+  const duplicateResume = async (id) => {
+    try {
+      const response = await fetch(`${API}/resumes/${id}/duplicate`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      if (response.ok) {
+        const newResume = await response.json();
+        setResumes([newResume, ...resumes]);
+        toast.success("Resume duplicated!");
+      }
+    } catch (error) {
+      toast.error("Failed to duplicate resume");
+    }
+  };
+
   const getATSScoreColor = (score) => {
     if (!score) return "bg-slate-100 text-slate-600";
     if (score >= 80) return "bg-emerald-100 text-emerald-700";
