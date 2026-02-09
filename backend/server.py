@@ -1270,6 +1270,9 @@ async def generate_pdf(resume_id: str, current_user: dict = Depends(get_current_
     else:
         pdf_buffer = generate_professional_pdf(resume)
     
+    # Track download analytics
+    await track_resume_event(resume_id, "download")
+    
     filename = f"{resume.get('title', 'resume').replace(' ', '_')}.pdf"
     
     return StreamingResponse(
