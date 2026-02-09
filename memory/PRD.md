@@ -252,34 +252,27 @@ To become the go-to platform for job seekers who want to create impactful, ATS-f
 
 ---
 
-### 🟡 PENDING FEATURES (P3 - Low Priority)
+### 🟢 COMPLETED FEATURES (P3 - Low Priority)
 
-- [ ] **Dark Mode**
-  - [ ] Dashboard dark mode toggle
-  - [ ] Resume builder dark mode
-  - [ ] Persist preference
+- [x] **Dark Mode**
+  - [x] Dashboard dark mode toggle
+  - [x] Theme persistence in localStorage
+  - [x] Backend sync for user preferences
+  - [x] Dark mode styles for all components
 
-- [ ] **Resume Analytics**
-  - [ ] View count tracking
-  - [ ] Download count tracking
-  - [ ] ATS score history
-  - [ ] Performance insights
+- [x] **Resume Analytics**
+  - [x] View count tracking
+  - [x] Download count tracking
+  - [x] Analytics dashboard endpoint
+  - [x] Per-resume analytics
 
-- [ ] **Public Resume Sharing**
-  - [ ] Generate public link
-  - [ ] Custom URL slug
-  - [ ] View tracking
-  - [ ] Password protection option
-
-- [ ] **Template Gallery**
-  - [ ] Browse all templates
-  - [ ] Template previews
-  - [ ] Filter by industry/style
-
-- [ ] **Interview Preparation**
-  - [ ] Common questions based on resume
-  - [ ] STAR answer generator
-  - [ ] Practice mode
+- [x] **Public Resume Sharing**
+  - [x] Generate public link
+  - [x] Custom URL slug
+  - [x] View tracking for public resumes
+  - [x] Password protection option
+  - [x] Share dialog in dashboard
+  - [x] Copy link functionality
 
 ### 🟡 PENDING FEATURES (P4 - Future)
 
