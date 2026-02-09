@@ -6,12 +6,14 @@ import { Button } from "../components/ui/button";
 import { toast } from "sonner";
 import { 
   FileText, Plus, MoreVertical, Download, Edit, Trash2, 
-  Crown, LogOut, User, Sparkles, Target, Clock
+  Crown, LogOut, User, Sparkles, Target, Clock, Settings,
+  Mail, Copy, History
 } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "../components/ui/dropdown-menu";
 
