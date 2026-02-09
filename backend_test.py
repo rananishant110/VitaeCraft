@@ -83,8 +83,8 @@ class VitaeCraftAPITester:
         """Test root API endpoint"""
         return self.run_test("Root API", "GET", "", 200)
 
-    def test_user_registration(self):
-        """Test user registration"""
+    def test_user_registration_with_verification(self):
+        """Test user registration with email verification token"""
         test_email = f"test_{uuid.uuid4().hex[:8]}@example.com"
         test_data = {
             "email": test_email,
@@ -92,13 +92,82 @@ class VitaeCraftAPITester:
             "full_name": "Test User"
         }
         
-        success, response = self.run_test("User Registration", "POST", "auth/register", 200, test_data)
+        success, response = self.run_test("User Registration with Verification", "POST", "auth/register", 200, test_data)
         
         if success and 'access_token' in response:
             self.token = response['access_token']
             self.user_id = response['user']['id']
-            print(f"   ✓ Token obtained: {self.token[:20]}...")
-            print(f"   ✓ User ID: {self.user_id}")
+            # Check that email_verified is False initially
+            if response['user'].get('email_verified') == False:
+                print(f"   ✓ Token obtained: {self.token[:20]}...")
+                print(f"   ✓ User ID: {self.user_id}")
+                print(f"   ✓ Email verification required: {not response['user'].get('email_verified')}")
+                return True
+            else:
+                self.log_result("User Registration with Verification", False, "Email should not be verified initially")
+                return False
+        return False
+
+    def test_forgot_password(self):
+        """Test forgot password functionality"""
+        # Use a test email (doesn't need to exist for security)
+        forgot_data = {
+            "email": "test@example.com"
+        }
+        
+        success, response = self.run_test("Forgot Password", "POST", "auth/forgot-password", 200, forgot_data)
+        
+        if success and response.get('message'):
+            print(f"   ✓ Forgot password response: {response['message']}")
+            return True
+        return False
+
+    def test_resend_verification(self):
+        """Test resend verification email"""
+        if not self.token:
+            self.log_result("Resend Verification", False, "No token available")
+            return False
+            
+        success, response = self.run_test("Resend Verification", "POST", "auth/resend-verification", 200)
+        
+        if success and response.get('message'):
+            print(f"   ✓ Resend verification response: {response['message']}")
+            return True
+        return False
+
+    def test_update_profile(self):
+        """Test profile update functionality"""
+        if not self.token:
+            self.log_result("Update Profile", False, "No token available")
+            return False
+            
+        update_data = {
+            "full_name": "Updated Test User"
+        }
+        
+        success, response = self.run_test("Update Profile", "PUT", "auth/update-profile", 200, update_data)
+        
+        if success and response.get('full_name') == "Updated Test User":
+            print(f"   ✓ Profile updated successfully")
+            return True
+        return False
+
+    def test_change_password(self):
+        """Test password change functionality"""
+        if not self.token:
+            self.log_result("Change Password", False, "No token available")
+            return False
+            
+        # This will fail because we don't know the current password, but we test the endpoint
+        password_data = {
+            "current_password": "wrongpassword",
+            "new_password": "newpassword123"
+        }
+        
+        success, response = self.run_test("Change Password (Invalid)", "PUT", "auth/update-profile", 400, password_data)
+        
+        if success:  # We expect 400 for wrong current password
+            print(f"   ✓ Password change validation working")
             return True
         return False
 
