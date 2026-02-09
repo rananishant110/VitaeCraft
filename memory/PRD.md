@@ -276,6 +276,16 @@ To become the go-to platform for job seekers who want to create impactful, ATS-f
 
 ### 🟡 PENDING FEATURES (P4 - Future)
 
+- [ ] **Template Gallery Page**
+  - [ ] Browse all templates
+  - [ ] Template previews
+  - [ ] Filter by industry/style
+
+- [ ] **Interview Preparation**
+  - [ ] Common questions based on resume
+  - [ ] STAR answer generator
+  - [ ] Practice mode
+
 - [ ] **Real LinkedIn OAuth Integration**
 - [ ] **Team/Enterprise Plans**
 - [ ] **Resume Review Service**
