@@ -1546,7 +1546,13 @@ async def get_resume_analytics(resume_id: str, current_user: dict = Depends(get_
             "last_downloaded": None
         }
     else:
+        # Ensure all required fields are present
         analytics["title"] = resume["title"]
+        analytics["view_count"] = analytics.get("view_count", 0)
+        analytics["download_count"] = analytics.get("download_count", 0)
+        analytics["ats_score_history"] = analytics.get("ats_score_history", [])
+        analytics["last_viewed"] = analytics.get("last_viewed")
+        analytics["last_downloaded"] = analytics.get("last_downloaded")
     
     return analytics
 
