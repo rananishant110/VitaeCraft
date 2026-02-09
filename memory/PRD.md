@@ -7,7 +7,7 @@
 
 **Product Name:** VitaeCraft  
 **Tagline:** Build Resumes That Get You Hired  
-**Version:** 1.1.0  
+**Version:** 1.2.0  
 **Last Updated:** January 2026
 
 VitaeCraft is an AI-powered resume builder that helps job seekers create ATS-optimized, professional resumes using the STAR methodology. The platform offers multiple templates, AI-enhanced content generation, job description matching, cover letter generation, and a seamless PDF export experience.
