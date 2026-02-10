@@ -20,8 +20,8 @@ from reportlab.lib.pagesizes import letter, A4
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
-from emergentintegrations.llm.chat import LlmChat, UserMessage
-from emergentintegrations.payments.stripe.checkout import StripeCheckout, CheckoutSessionResponse, CheckoutStatusResponse, CheckoutSessionRequest
+from openai import AsyncOpenAI
+import stripe as stripe_sdk
 import resend
 
 ROOT_DIR = Path(__file__).parent
@@ -725,22 +725,35 @@ async def restore_resume_version(resume_id: str, version: int, current_user: dic
 
 # ============== AI ROUTES ==============
 
-async def get_ai_chat():
-    api_key = os.environ.get('EMERGENT_LLM_KEY')
-    chat = LlmChat(
-        api_key=api_key,
-        session_id=str(uuid.uuid4()),
-        system_message="You are a professional resume writing expert. Help users create ATS-optimized resumes using STAR methodology (Situation, Task, Action, Result). Provide concise, impactful content."
+AI_SYSTEM_PROMPT = (
+    "You are a professional resume writing expert. Help users create "
+    "ATS-optimized resumes using STAR methodology (Situation, Task, Action, Result). "
+    "Provide concise, impactful content."
+)
+
+def get_openai_client() -> AsyncOpenAI:
+    api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+    if not api_key:
+        raise HTTPException(status_code=500, detail="OPENAI_API_KEY is not set")
+    return AsyncOpenAI(api_key=api_key)
+
+async def get_ai_response(prompt: str) -> str:
+    client = get_openai_client()
+    model = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+    response = await client.responses.create(
+        model=model,
+        input=[
+            {"role": "system", "content": AI_SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ],
     )
-    chat.with_model("openai", "gpt-5.2")
-    return chat
+    return (response.output_text or "").strip()
 
 @api_router.post("/ai/star-enhance")
 async def enhance_with_star(request: STARRequest, current_user: dict = Depends(get_current_user)):
     if not current_user.get("is_premium", False):
         raise HTTPException(status_code=403, detail="Premium subscription required")
     
-    chat = await get_ai_chat()
     prompt = f"""Transform this job experience into a powerful STAR-formatted achievement:
 
 Role: {request.role}
@@ -755,8 +768,7 @@ Each bullet should:
 
 Return only the bullet points, no explanations."""
 
-    message = UserMessage(text=prompt)
-    response = await chat.send_message(message)
+    response = await get_ai_response(prompt)
     
     return {"enhanced_text": response}
 
@@ -769,7 +781,6 @@ async def optimize_for_ats(request: ATSOptimizeRequest, current_user: dict = Dep
     if not resume:
         raise HTTPException(status_code=404, detail="Resume not found")
     
-    chat = await get_ai_chat()
     prompt = f"""Analyze this resume against the job description and provide:
 1. An ATS compatibility score (0-100)
 2. Missing keywords that should be added
@@ -789,8 +800,7 @@ Respond in JSON format:
     "optimized_summary": "<improved professional summary>"
 }}"""
 
-    message = UserMessage(text=prompt)
-    response = await chat.send_message(message)
+    response = await get_ai_response(prompt)
     
     try:
         import json
@@ -812,7 +822,6 @@ async def tailor_resume(request: ATSOptimizeRequest, current_user: dict = Depend
     if not resume:
         raise HTTPException(status_code=404, detail="Resume not found")
     
-    chat = await get_ai_chat()
     prompt = f"""Tailor this resume for the specific job description. Provide:
 1. Rewritten professional summary targeted to this role
 2. Suggested skill additions
@@ -835,8 +844,7 @@ Respond in JSON format:
     "keywords_to_emphasize": ["keyword1", "keyword2"]
 }}"""
 
-    message = UserMessage(text=prompt)
-    response = await chat.send_message(message)
+    response = await get_ai_response(prompt)
     
     try:
         import json
@@ -849,7 +857,6 @@ async def improve_text(request: AIRequest, current_user: dict = Depends(get_curr
     if not current_user.get("is_premium", False):
         raise HTTPException(status_code=403, detail="Premium subscription required")
     
-    chat = await get_ai_chat()
     prompt = f"""Improve this resume text to be more impactful and professional:
 
 Original: {request.text}
@@ -863,8 +870,7 @@ Provide an improved version that:
 
 Return only the improved text."""
 
-    message = UserMessage(text=prompt)
-    response = await chat.send_message(message)
+    response = await get_ai_response(prompt)
     
     return {"improved_text": response}
 
@@ -873,8 +879,6 @@ async def generate_summary(request: SummaryGenerateRequest, current_user: dict =
     """Generate a professional summary based on experiences and skills"""
     if not current_user.get("is_premium", False):
         raise HTTPException(status_code=403, detail="Premium subscription required")
-    
-    chat = await get_ai_chat()
     
     tone_instructions = {
         "professional": "formal, corporate, and achievement-focused",
@@ -901,8 +905,7 @@ Create a compelling 3-4 sentence professional summary that:
 
 Return only the summary text, no explanations."""
 
-    message = UserMessage(text=prompt)
-    response = await chat.send_message(message)
+    response = await get_ai_response(prompt)
     
     return {"summary": response}
 
@@ -912,7 +915,6 @@ async def suggest_skills(request: SkillsSuggestRequest, current_user: dict = Dep
     if not current_user.get("is_premium", False):
         raise HTTPException(status_code=403, detail="Premium subscription required")
     
-    chat = await get_ai_chat()
     prompt = f"""Suggest relevant skills for a resume based on:
 
 Job Title: {request.job_title}
@@ -931,8 +933,7 @@ Respond in JSON format:
     "trending_skills": ["skill1", "skill2", "skill3"]
 }}"""
 
-    message = UserMessage(text=prompt)
-    response = await chat.send_message(message)
+    response = await get_ai_response(prompt)
     
     try:
         import json
@@ -950,7 +951,6 @@ async def generate_cover_letter(request: CoverLetterRequest, current_user: dict 
     if not resume:
         raise HTTPException(status_code=404, detail="Resume not found")
     
-    chat = await get_ai_chat()
     prompt = f"""Generate a professional cover letter based on:
 
 Resume Data:
@@ -969,8 +969,7 @@ Create a compelling cover letter that:
 
 Return only the cover letter text."""
 
-    message = UserMessage(text=prompt)
-    response = await chat.send_message(message)
+    response = await get_ai_response(prompt)
     
     return {"cover_letter": response}
 
@@ -1352,31 +1351,40 @@ async def create_checkout(request: PaymentRequest, http_request: Request, curren
     
     amount = PRICING[request.plan]
     stripe_api_key = os.environ.get('STRIPE_API_KEY')
+    if not stripe_api_key:
+        raise HTTPException(status_code=500, detail="STRIPE_API_KEY is not set")
+    stripe_sdk.api_key = stripe_api_key
     
     host_url = request.origin_url
     webhook_url = f"{host_url}/api/webhook/stripe"
     success_url = f"{host_url}/payment-success?session_id={{CHECKOUT_SESSION_ID}}"
     cancel_url = f"{host_url}/pricing"
     
-    stripe_checkout = StripeCheckout(api_key=stripe_api_key, webhook_url=webhook_url)
-    
-    checkout_request = CheckoutSessionRequest(
-        amount=float(amount),
-        currency="usd",
+    session = stripe_sdk.checkout.Session.create(
+        mode="payment",
+        payment_method_types=["card"],
+        line_items=[
+            {
+                "price_data": {
+                    "currency": "usd",
+                    "product_data": {"name": f"VitaeCraft {request.plan} plan"},
+                    "unit_amount": int(amount * 100),
+                },
+                "quantity": 1,
+            }
+        ],
         success_url=success_url,
         cancel_url=cancel_url,
         metadata={
             "user_id": current_user["id"],
             "plan": request.plan,
-            "email": current_user["email"]
-        }
+            "email": current_user["email"],
+        },
     )
-    
-    session = await stripe_checkout.create_checkout_session(checkout_request)
     
     transaction = {
         "id": str(uuid.uuid4()),
-        "session_id": session.session_id,
+        "session_id": session.id,
         "user_id": current_user["id"],
         "email": current_user["email"],
         "amount": amount,
@@ -1389,18 +1397,20 @@ async def create_checkout(request: PaymentRequest, http_request: Request, curren
     
     await db.payment_transactions.insert_one(transaction)
     
-    return {"url": session.url, "session_id": session.session_id}
+    return {"url": session.url, "session_id": session.id}
 
 @api_router.get("/payments/status/{session_id}")
 async def get_payment_status(session_id: str, current_user: dict = Depends(get_current_user)):
     stripe_api_key = os.environ.get('STRIPE_API_KEY')
-    stripe_checkout = StripeCheckout(api_key=stripe_api_key, webhook_url="")
+    if not stripe_api_key:
+        raise HTTPException(status_code=500, detail="STRIPE_API_KEY is not set")
+    stripe_sdk.api_key = stripe_api_key
     
-    status = await stripe_checkout.get_checkout_status(session_id)
+    session = stripe_sdk.checkout.Session.retrieve(session_id)
     
     transaction = await db.payment_transactions.find_one({"session_id": session_id})
     
-    if transaction and status.payment_status == "paid":
+    if transaction and session.payment_status == "paid":
         if transaction.get("payment_status") != "paid":
             await db.payment_transactions.update_one(
                 {"session_id": session_id},
@@ -1419,17 +1429,17 @@ async def get_payment_status(session_id: str, current_user: dict = Depends(get_c
                     "subscription_type": plan
                 }}
             )
-    elif transaction and status.status == "expired":
+    elif transaction and session.status == "expired":
         await db.payment_transactions.update_one(
             {"session_id": session_id},
             {"$set": {"status": "expired", "payment_status": "expired"}}
         )
     
     return {
-        "status": status.status,
-        "payment_status": status.payment_status,
-        "amount": status.amount_total / 100,
-        "currency": status.currency
+        "status": session.status,
+        "payment_status": session.payment_status,
+        "amount": (session.amount_total or 0) / 100,
+        "currency": session.currency
     }
 
 @api_router.get("/payments/history")
@@ -1447,13 +1457,18 @@ async def stripe_webhook(request: Request):
     signature = request.headers.get("Stripe-Signature")
     
     stripe_api_key = os.environ.get('STRIPE_API_KEY')
-    stripe_checkout = StripeCheckout(api_key=stripe_api_key, webhook_url="")
+    webhook_secret = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
+    if not stripe_api_key:
+        raise HTTPException(status_code=500, detail="STRIPE_API_KEY is not set")
+    if not webhook_secret:
+        raise HTTPException(status_code=500, detail="STRIPE_WEBHOOK_SECRET is not set")
+    stripe_sdk.api_key = stripe_api_key
     
     try:
-        webhook_response = await stripe_checkout.handle_webhook(body, signature)
-        
-        if webhook_response.payment_status == "paid":
-            session_id = webhook_response.session_id
+        event = stripe_sdk.Webhook.construct_event(body, signature, webhook_secret)
+        if event.get("type") == "checkout.session.completed":
+            session = event["data"]["object"]
+            session_id = session.get("id")
             transaction = await db.payment_transactions.find_one({"session_id": session_id})
             
             if transaction and transaction.get("payment_status") != "paid":
