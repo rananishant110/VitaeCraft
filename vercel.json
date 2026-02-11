@@ -1,9 +1,8 @@
 {
   "buildCommand": "cd frontend && npm run build",
   "outputDirectory": "frontend/build",
-  "framework": "react",
   "env": {
-    "MONGO_URL": "@mongo_url",
+    "DATABASE_URL": "@database_url",
     "DB_NAME": "vitaecraft_prod",
     "OPENAI_API_KEY": "@openai_api_key",
     "STRIPE_API_KEY": "@stripe_api_key",
