@@ -2,7 +2,8 @@ from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Header
 from fastapi.responses import StreamingResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
-from motor.motor_asyncio import AsyncIOMotorClient
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, func, and_, or_
 import os
 import logging
 import asyncio
@@ -24,13 +25,25 @@ from openai import AsyncOpenAI
 import stripe as stripe_sdk
 import resend
 
-ROOT_DIR = Path(__file__).parent
-load_dotenv(ROOT_DIR / '.env')
+# Database imports
+from database import get_db, init_db, engine
+from models import (
+    User, Resume, ResumeVersion, CoverLetter, PasswordReset, 
+    PaymentTransaction, ResumeAnalytics
+)
 
-# MongoDB connection
-mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
+ROOT_DIR = Path(__file__).parent
+
+# Load environment-specific .env file
+ENV = os.getenv('ENV', 'development')  # default to development
+env_file = ROOT_DIR / f'.env.{ENV}' if ENV == 'production' else ROOT_DIR / '.env'
+
+# Fallback to .env if environment-specific file doesn't exist
+if not env_file.exists():
+    env_file = ROOT_DIR / '.env'
+
+load_dotenv(env_file)
+print(f"Loaded environment from: {env_file}")
 
 # JWT Settings
 JWT_SECRET = os.environ.get('JWT_SECRET', 'resume_builder_secret_key')
@@ -51,6 +64,15 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # Create the main app
 app = FastAPI()
+
+# Add CORS middleware FIRST (before routes)
+app.add_middleware(
+    CORSMiddleware,
+    allow_credentials=True,
+    allow_origins=["http://localhost:3000", "http://localhost:8000", os.environ.get('FRONTEND_URL', '*')],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Create a router with the /api prefix
 api_router = APIRouter(prefix="/api")
@@ -316,7 +338,7 @@ async def send_email(to_email: str, subject: str, html_content: str) -> bool:
         logger.error(f"Failed to send email: {str(e)}")
         return False
 
-async def get_current_user(authorization: str = Header(None)) -> dict:
+async def get_current_user(authorization: str = Header(None), db: AsyncSession = Depends(get_db)) -> User:
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Not authenticated")
     
@@ -327,7 +349,8 @@ async def get_current_user(authorization: str = Header(None)) -> dict:
         if user_id is None:
             raise HTTPException(status_code=401, detail="Invalid token")
         
-        user = await db.users.find_one({"id": user_id}, {"_id": 0})
+        result = await db.execute(select(User).where(User.id == uuid.UUID(user_id)))
+        user = result.scalar_one_or_none()
         if user is None:
             raise HTTPException(status_code=401, detail="User not found")
         return user
@@ -335,37 +358,42 @@ async def get_current_user(authorization: str = Header(None)) -> dict:
         raise HTTPException(status_code=401, detail="Token expired")
     except jwt.PyJWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=401, detail="Invalid token format")
 
 # ============== AUTH ROUTES ==============
 
 @api_router.post("/auth/register", response_model=TokenResponse)
-async def register(user_data: UserRegister, request: Request):
-    existing = await db.users.find_one({"email": user_data.email})
+async def register(user_data: UserRegister, request: Request, db: AsyncSession = Depends(get_db)):
+    # Check if email already exists
+    result = await db.execute(select(User).where(User.email == user_data.email))
+    existing = result.scalar_one_or_none()
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
     
-    user_id = str(uuid.uuid4())
+    user_id = uuid.uuid4()
     hashed_password = get_password_hash(user_data.password)
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(timezone.utc)
     verification_token = generate_token()
     
-    user_doc = {
-        "id": user_id,
-        "email": user_data.email,
-        "password": hashed_password,
-        "full_name": user_data.full_name,
-        "is_premium": False,
-        "subscription_type": None,
-        "email_verified": False,
-        "verification_token": verification_token,
-        "created_at": now
-    }
+    user = User(
+        id=user_id,
+        email=user_data.email,
+        password=hashed_password,
+        full_name=user_data.full_name,
+        is_premium=False,
+        subscription_type=None,
+        email_verified=False,
+        verification_token=verification_token,
+        created_at=now
+    )
     
-    await db.users.insert_one(user_doc)
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
     
     # Send verification email
     base_url = str(request.base_url).rstrip('/')
-    # Use frontend URL for verification link
     frontend_base = os.environ.get('FRONTEND_URL', base_url.replace(':8001', ':3000'))
     verify_link = f"{frontend_base}/verify-email?token={verification_token}"
     
@@ -382,73 +410,74 @@ async def register(user_data: UserRegister, request: Request):
     """
     await send_email(user_data.email, "Verify your VitaeCraft account", email_html)
     
-    token = create_access_token(user_id, user_data.email)
+    token = create_access_token(str(user.id), user.email)
     user_response = UserResponse(
-        id=user_id,
-        email=user_data.email,
-        full_name=user_data.full_name,
-        is_premium=False,
-        subscription_type=None,
-        email_verified=False,
-        created_at=now
+        id=str(user.id),
+        email=user.email,
+        full_name=user.full_name,
+        is_premium=user.is_premium,
+        subscription_type=user.subscription_type,
+        email_verified=user.email_verified,
+        created_at=user.created_at.isoformat()
     )
     
     return TokenResponse(access_token=token, user=user_response)
 
 @api_router.post("/auth/login", response_model=TokenResponse)
-async def login(credentials: UserLogin):
-    user = await db.users.find_one({"email": credentials.email}, {"_id": 0})
-    if not user or not verify_password(credentials.password, user["password"]):
+async def login(credentials: UserLogin, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(User).where(User.email == credentials.email))
+    user = result.scalar_one_or_none()
+    
+    if not user or not verify_password(credentials.password, user.password):
         raise HTTPException(status_code=401, detail="Invalid email or password")
     
-    token = create_access_token(user["id"], user["email"])
+    token = create_access_token(str(user.id), user.email)
     user_response = UserResponse(
-        id=user["id"],
-        email=user["email"],
-        full_name=user["full_name"],
-        is_premium=user.get("is_premium", False),
-        subscription_type=user.get("subscription_type"),
-        email_verified=user.get("email_verified", False),
-        created_at=user["created_at"]
+        id=str(user.id),
+        email=user.email,
+        full_name=user.full_name,
+        is_premium=user.is_premium,
+        subscription_type=user.subscription_type,
+        email_verified=user.email_verified,
+        created_at=user.created_at.isoformat()
     )
     
     return TokenResponse(access_token=token, user=user_response)
 
 @api_router.get("/auth/me", response_model=UserResponse)
-async def get_me(current_user: dict = Depends(get_current_user)):
+async def get_me(current_user: User = Depends(get_current_user)):
     return UserResponse(
-        id=current_user["id"],
-        email=current_user["email"],
-        full_name=current_user["full_name"],
-        is_premium=current_user.get("is_premium", False),
-        subscription_type=current_user.get("subscription_type"),
-        email_verified=current_user.get("email_verified", False),
-        created_at=current_user["created_at"]
+        id=str(current_user.id),
+        email=current_user.email,
+        full_name=current_user.full_name,
+        is_premium=current_user.is_premium,
+        subscription_type=current_user.subscription_type,
+        email_verified=current_user.email_verified,
+        created_at=current_user.created_at.isoformat()
     )
 
 @api_router.post("/auth/verify-email")
-async def verify_email(data: VerifyEmailRequest):
-    user = await db.users.find_one({"verification_token": data.token})
+async def verify_email(data: VerifyEmailRequest, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(User).where(User.verification_token == data.token))
+    user = result.scalar_one_or_none()
+    
     if not user:
         raise HTTPException(status_code=400, detail="Invalid or expired verification token")
     
-    await db.users.update_one(
-        {"id": user["id"]},
-        {"$set": {"email_verified": True}, "$unset": {"verification_token": ""}}
-    )
+    user.email_verified = True
+    user.verification_token = None
+    await db.commit()
     
     return {"message": "Email verified successfully"}
 
 @api_router.post("/auth/resend-verification")
-async def resend_verification(current_user: dict = Depends(get_current_user), request: Request = None):
-    if current_user.get("email_verified"):
+async def resend_verification(current_user: User = Depends(get_current_user), request: Request = None, db: AsyncSession = Depends(get_db)):
+    if current_user.email_verified:
         raise HTTPException(status_code=400, detail="Email already verified")
     
     verification_token = generate_token()
-    await db.users.update_one(
-        {"id": current_user["id"]},
-        {"$set": {"verification_token": verification_token}}
-    )
+    current_user.verification_token = verification_token
+    await db.commit()
     
     frontend_base = os.environ.get('FRONTEND_URL', 'http://localhost:3000')
     verify_link = f"{frontend_base}/verify-email?token={verification_token}"
@@ -456,19 +485,21 @@ async def resend_verification(current_user: dict = Depends(get_current_user), re
     email_html = f"""
     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
         <h2 style="color: #002FA7;">Verify Your Email</h2>
-        <p>Hi {current_user['full_name']},</p>
+        <p>Hi {current_user.full_name},</p>
         <p>Click below to verify your email:</p>
         <a href="{verify_link}" style="display: inline-block; background: linear-gradient(to right, #002FA7, #FF4F00); color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; margin: 20px 0;">Verify Email</a>
         <p>This link expires in 24 hours.</p>
     </div>
     """
-    await send_email(current_user["email"], "Verify your VitaeCraft account", email_html)
+    await send_email(current_user.email, "Verify your VitaeCraft account", email_html)
     
     return {"message": "Verification email sent"}
 
 @api_router.post("/auth/forgot-password")
-async def forgot_password(data: ForgotPasswordRequest):
-    user = await db.users.find_one({"email": data.email})
+async def forgot_password(data: ForgotPasswordRequest, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(User).where(User.email == data.email))
+    user = result.scalar_one_or_none()
+    
     if not user:
         # Don't reveal if email exists
         return {"message": "If the email exists, a reset link has been sent"}
@@ -476,13 +507,16 @@ async def forgot_password(data: ForgotPasswordRequest):
     reset_token = generate_token()
     expires_at = datetime.now(timezone.utc) + timedelta(hours=1)
     
-    await db.password_resets.insert_one({
-        "id": str(uuid.uuid4()),
-        "user_id": user["id"],
-        "token": reset_token,
-        "expires_at": expires_at.isoformat(),
-        "used": False
-    })
+    password_reset = PasswordReset(
+        id=uuid.uuid4(),
+        user_id=user.id,
+        token=reset_token,
+        expires_at=expires_at,
+        used=False
+    )
+    
+    db.add(password_reset)
+    await db.commit()
     
     frontend_base = os.environ.get('FRONTEND_URL', 'http://localhost:3000')
     reset_link = f"{frontend_base}/reset-password?token={reset_token}"
@@ -490,7 +524,7 @@ async def forgot_password(data: ForgotPasswordRequest):
     email_html = f"""
     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
         <h2 style="color: #002FA7;">Reset Your Password</h2>
-        <p>Hi {user['full_name']},</p>
+        <p>Hi {user.full_name},</p>
         <p>You requested a password reset. Click below to set a new password:</p>
         <a href="{reset_link}" style="display: inline-block; background: linear-gradient(to right, #002FA7, #FF4F00); color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; margin: 20px 0;">Reset Password</a>
         <p>This link expires in 1 hour.</p>
@@ -502,224 +536,355 @@ async def forgot_password(data: ForgotPasswordRequest):
     return {"message": "If the email exists, a reset link has been sent"}
 
 @api_router.post("/auth/reset-password")
-async def reset_password(data: ResetPasswordRequest):
-    reset_record = await db.password_resets.find_one({
-        "token": data.token,
-        "used": False
-    })
+async def reset_password(data: ResetPasswordRequest, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(PasswordReset).where(
+            and_(PasswordReset.token == data.token, PasswordReset.used == False)
+        )
+    )
+    reset_record = result.scalar_one_or_none()
     
     if not reset_record:
         raise HTTPException(status_code=400, detail="Invalid or expired reset token")
     
-    expires_at = datetime.fromisoformat(reset_record["expires_at"])
-    if datetime.now(timezone.utc) > expires_at:
+    if datetime.now(timezone.utc) > reset_record.expires_at:
         raise HTTPException(status_code=400, detail="Reset token has expired")
     
-    hashed_password = get_password_hash(data.new_password)
-    await db.users.update_one(
-        {"id": reset_record["user_id"]},
-        {"$set": {"password": hashed_password}}
-    )
+    # Update user password
+    result = await db.execute(select(User).where(User.id == reset_record.user_id))
+    user = result.scalar_one_or_none()
     
-    await db.password_resets.update_one(
-        {"token": data.token},
-        {"$set": {"used": True}}
-    )
+    if user:
+        user.password = get_password_hash(data.new_password)
+        reset_record.used = True
+        await db.commit()
     
     return {"message": "Password reset successfully"}
 
 @api_router.put("/auth/update-profile", response_model=UserResponse)
-async def update_profile(data: UserUpdateRequest, current_user: dict = Depends(get_current_user)):
+async def update_profile(data: UserUpdateRequest, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     update_data = {}
     
     if data.full_name:
-        update_data["full_name"] = data.full_name
+        current_user.full_name = data.full_name
     
     if data.new_password:
         if not data.current_password:
             raise HTTPException(status_code=400, detail="Current password required")
-        if not verify_password(data.current_password, current_user["password"]):
+        if not verify_password(data.current_password, current_user.password):
             raise HTTPException(status_code=400, detail="Current password is incorrect")
-        update_data["password"] = get_password_hash(data.new_password)
+        current_user.password = get_password_hash(data.new_password)
     
-    if update_data:
-        await db.users.update_one({"id": current_user["id"]}, {"$set": update_data})
+    await db.commit()
+    await db.refresh(current_user)
     
-    updated_user = await db.users.find_one({"id": current_user["id"]}, {"_id": 0})
     return UserResponse(
-        id=updated_user["id"],
-        email=updated_user["email"],
-        full_name=updated_user["full_name"],
-        is_premium=updated_user.get("is_premium", False),
-        subscription_type=updated_user.get("subscription_type"),
-        email_verified=updated_user.get("email_verified", False),
-        created_at=updated_user["created_at"]
+        id=str(current_user.id),
+        email=current_user.email,
+        full_name=current_user.full_name,
+        is_premium=current_user.is_premium,
+        subscription_type=current_user.subscription_type,
+        email_verified=current_user.email_verified,
+        created_at=current_user.created_at.isoformat()
     )
 
 # ============== RESUME ROUTES ==============
 
 @api_router.post("/resumes", response_model=ResumeResponse)
-async def create_resume(resume: ResumeCreate, current_user: dict = Depends(get_current_user)):
-    resume_id = str(uuid.uuid4())
-    now = datetime.now(timezone.utc).isoformat()
+async def create_resume(resume: ResumeCreate, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    resume_id = uuid.uuid4()
+    now = datetime.now(timezone.utc)
     
-    resume_doc = {
-        "id": resume_id,
-        "user_id": current_user["id"],
-        "title": resume.title,
-        "template": resume.template,
-        "data": resume.data.model_dump(),
-        "ats_score": None,
-        "version": 1,
-        "created_at": now,
-        "updated_at": now
-    }
+    resume_obj = Resume(
+        id=resume_id,
+        user_id=current_user.id,
+        title=resume.title,
+        template=resume.template,
+        data=resume.data.model_dump(),
+        ats_score=None,
+        version=1,
+        created_at=now,
+        updated_at=now
+    )
     
-    await db.resumes.insert_one(resume_doc)
+    db.add(resume_obj)
+    await db.commit()
+    await db.refresh(resume_obj)
     
-    return ResumeResponse(**{k: v for k, v in resume_doc.items() if k != "_id"})
+    return ResumeResponse(
+        id=str(resume_obj.id),
+        user_id=str(resume_obj.user_id),
+        title=resume_obj.title,
+        template=resume_obj.template,
+        data=ResumeData(**resume_obj.data),
+        ats_score=resume_obj.ats_score,
+        version=resume_obj.version,
+        created_at=resume_obj.created_at.isoformat(),
+        updated_at=resume_obj.updated_at.isoformat()
+    )
 
 @api_router.get("/resumes", response_model=List[ResumeResponse])
-async def get_resumes(current_user: dict = Depends(get_current_user)):
-    resumes = await db.resumes.find(
-        {"user_id": current_user["id"]},
-        {"_id": 0}
-    ).to_list(100)
-    return resumes
+async def get_resumes(current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(Resume).where(Resume.user_id == current_user.id).order_by(Resume.created_at.desc())
+    )
+    resumes = result.scalars().all()
+    
+    return [
+        ResumeResponse(
+            id=str(r.id),
+            user_id=str(r.user_id),
+            title=r.title,
+            template=r.template,
+            data=ResumeData(**r.data),
+            ats_score=r.ats_score,
+            version=r.version,
+            created_at=r.created_at.isoformat(),
+            updated_at=r.updated_at.isoformat()
+        )
+        for r in resumes
+    ]
 
 @api_router.get("/resumes/{resume_id}", response_model=ResumeResponse)
-async def get_resume(resume_id: str, current_user: dict = Depends(get_current_user)):
-    resume = await db.resumes.find_one(
-        {"id": resume_id, "user_id": current_user["id"]},
-        {"_id": 0}
+async def get_resume(resume_id: str, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    try:
+        resume_uuid = uuid.UUID(resume_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid resume ID format")
+    
+    result = await db.execute(
+        select(Resume).where(
+            and_(Resume.id == resume_uuid, Resume.user_id == current_user.id)
+        )
     )
+    resume = result.scalar_one_or_none()
+    
     if not resume:
         raise HTTPException(status_code=404, detail="Resume not found")
-    return resume
+    
+    return ResumeResponse(
+        id=str(resume.id),
+        user_id=str(resume.user_id),
+        title=resume.title,
+        template=resume.template,
+        data=ResumeData(**resume.data),
+        ats_score=resume.ats_score,
+        version=resume.version,
+        created_at=resume.created_at.isoformat(),
+        updated_at=resume.updated_at.isoformat()
+    )
 
 @api_router.put("/resumes/{resume_id}", response_model=ResumeResponse)
-async def update_resume(resume_id: str, update: ResumeUpdate, current_user: dict = Depends(get_current_user)):
-    resume = await db.resumes.find_one({"id": resume_id, "user_id": current_user["id"]}, {"_id": 0})
+async def update_resume(resume_id: str, update: ResumeUpdate, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    try:
+        resume_uuid = uuid.UUID(resume_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid resume ID format")
+    
+    result = await db.execute(
+        select(Resume).where(
+            and_(Resume.id == resume_uuid, Resume.user_id == current_user.id)
+        )
+    )
+    resume = result.scalar_one_or_none()
+    
     if not resume:
         raise HTTPException(status_code=404, detail="Resume not found")
     
     # Save current version to history before updating
-    version_doc = {
-        "id": str(uuid.uuid4()),
-        "resume_id": resume_id,
-        "version": resume.get("version", 1),
-        "title": resume["title"],
-        "template": resume["template"],
-        "data": resume["data"],
-        "created_at": resume["updated_at"]
-    }
-    await db.resume_versions.insert_one(version_doc)
+    version_doc = ResumeVersion(
+        id=uuid.uuid4(),
+        resume_id=resume.id,
+        version=resume.version,
+        title=resume.title,
+        template=resume.template,
+        data=resume.data,
+        created_at=resume.updated_at
+    )
+    db.add(version_doc)
     
-    update_data = {}
+    # Update resume
     if update.title is not None:
-        update_data["title"] = update.title
+        resume.title = update.title
     if update.template is not None:
-        update_data["template"] = update.template
+        resume.template = update.template
     if update.data is not None:
-        update_data["data"] = update.data.model_dump()
+        resume.data = update.data.model_dump()
     
-    update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
-    update_data["version"] = resume.get("version", 1) + 1
+    resume.updated_at = datetime.now(timezone.utc)
+    resume.version = resume.version + 1
     
-    await db.resumes.update_one({"id": resume_id}, {"$set": update_data})
+    await db.commit()
+    await db.refresh(resume)
     
-    updated_resume = await db.resumes.find_one({"id": resume_id}, {"_id": 0})
-    return updated_resume
+    return ResumeResponse(
+        id=str(resume.id),
+        user_id=str(resume.user_id),
+        title=resume.title,
+        template=resume.template,
+        data=ResumeData(**resume.data),
+        ats_score=resume.ats_score,
+        version=resume.version,
+        created_at=resume.created_at.isoformat(),
+        updated_at=resume.updated_at.isoformat()
+    )
 
 @api_router.delete("/resumes/{resume_id}")
-async def delete_resume(resume_id: str, current_user: dict = Depends(get_current_user)):
-    result = await db.resumes.delete_one({"id": resume_id, "user_id": current_user["id"]})
-    if result.deleted_count == 0:
+async def delete_resume(resume_id: str, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    try:
+        resume_uuid = uuid.UUID(resume_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid resume ID format")
+    
+    result = await db.execute(
+        select(Resume).where(
+            and_(Resume.id == resume_uuid, Resume.user_id == current_user.id)
+        )
+    )
+    resume = result.scalar_one_or_none()
+    
+    if not resume:
         raise HTTPException(status_code=404, detail="Resume not found")
-    # Also delete version history
-    await db.resume_versions.delete_many({"resume_id": resume_id})
+    
+    await db.delete(resume)
+    await db.commit()
+    
     return {"message": "Resume deleted successfully"}
 
 @api_router.post("/resumes/{resume_id}/duplicate", response_model=ResumeResponse)
-async def duplicate_resume(resume_id: str, current_user: dict = Depends(get_current_user)):
+async def duplicate_resume(resume_id: str, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     """Duplicate an existing resume"""
-    resume = await db.resumes.find_one(
-        {"id": resume_id, "user_id": current_user["id"]},
-        {"_id": 0}
+    try:
+        resume_uuid = uuid.UUID(resume_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid resume ID format")
+    
+    result = await db.execute(
+        select(Resume).where(
+            and_(Resume.id == resume_uuid, Resume.user_id == current_user.id)
+        )
     )
+    resume = result.scalar_one_or_none()
+    
     if not resume:
         raise HTTPException(status_code=404, detail="Resume not found")
     
-    new_id = str(uuid.uuid4())
-    now = datetime.now(timezone.utc).isoformat()
+    new_id = uuid.uuid4()
+    now = datetime.now(timezone.utc)
     
-    new_resume = {
-        "id": new_id,
-        "user_id": current_user["id"],
-        "title": f"{resume['title']} (Copy)",
-        "template": resume["template"],
-        "data": resume["data"],
-        "ats_score": None,
-        "version": 1,
-        "created_at": now,
-        "updated_at": now
-    }
+    new_resume = Resume(
+        id=new_id,
+        user_id=current_user.id,
+        title=f"{resume.title} (Copy)",
+        template=resume.template,
+        data=resume.data,
+        ats_score=None,
+        version=1,
+        created_at=now,
+        updated_at=now
+    )
     
-    await db.resumes.insert_one(new_resume)
-    return ResumeResponse(**new_resume)
+    db.add(new_resume)
+    await db.commit()
+    await db.refresh(new_resume)
+    
+    return ResumeResponse(
+        id=str(new_resume.id),
+        user_id=str(new_resume.user_id),
+        title=new_resume.title,
+        template=new_resume.template,
+        data=ResumeData(**new_resume.data),
+        ats_score=new_resume.ats_score,
+        version=new_resume.version,
+        created_at=new_resume.created_at.isoformat(),
+        updated_at=new_resume.updated_at.isoformat()
+    )
 
 @api_router.get("/resumes/{resume_id}/versions", response_model=List[ResumeVersionResponse])
-async def get_resume_versions(resume_id: str, current_user: dict = Depends(get_current_user)):
+async def get_resume_versions(resume_id: str, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     """Get version history for a resume"""
-    resume = await db.resumes.find_one({"id": resume_id, "user_id": current_user["id"]})
+    try:
+        resume_uuid = uuid.UUID(resume_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid resume ID format")
+    
+    result = await db.execute(
+        select(Resume).where(
+            and_(Resume.id == resume_uuid, Resume.user_id == current_user.id)
+        )
+    )
+    resume = result.scalar_one_or_none()
+    
     if not resume:
         raise HTTPException(status_code=404, detail="Resume not found")
     
-    versions = await db.resume_versions.find(
-        {"resume_id": resume_id},
-        {"_id": 0}
-    ).sort("version", -1).to_list(50)
+    result = await db.execute(
+        select(ResumeVersion).where(ResumeVersion.resume_id == resume_uuid).order_by(ResumeVersion.version.desc())
+    )
+    versions = result.scalars().all()
     
-    return versions
+    return [
+        ResumeVersionResponse(
+            id=str(v.id),
+            resume_id=str(v.resume_id),
+            version=v.version,
+            title=v.title,
+            template=v.template,
+            data=ResumeData(**v.data),
+            created_at=v.created_at.isoformat()
+        )
+        for v in versions
+    ]
 
 @api_router.post("/resumes/{resume_id}/restore/{version}")
-async def restore_resume_version(resume_id: str, version: int, current_user: dict = Depends(get_current_user)):
+async def restore_resume_version(resume_id: str, version: int, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     """Restore a resume to a previous version"""
-    resume = await db.resumes.find_one({"id": resume_id, "user_id": current_user["id"]})
+    try:
+        resume_uuid = uuid.UUID(resume_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid resume ID format")
+    
+    result = await db.execute(
+        select(Resume).where(
+            and_(Resume.id == resume_uuid, Resume.user_id == current_user.id)
+        )
+    )
+    resume = result.scalar_one_or_none()
+    
     if not resume:
         raise HTTPException(status_code=404, detail="Resume not found")
     
-    version_doc = await db.resume_versions.find_one(
-        {"resume_id": resume_id, "version": version},
-        {"_id": 0}
+    result = await db.execute(
+        select(ResumeVersion).where(
+            and_(ResumeVersion.resume_id == resume_uuid, ResumeVersion.version == version)
+        )
     )
+    version_doc = result.scalar_one_or_none()
+    
     if not version_doc:
         raise HTTPException(status_code=404, detail="Version not found")
     
     # Save current as a version first
-    current_version_doc = {
-        "id": str(uuid.uuid4()),
-        "resume_id": resume_id,
-        "version": resume.get("version", 1),
-        "title": resume["title"],
-        "template": resume["template"],
-        "data": resume["data"],
-        "created_at": resume["updated_at"]
-    }
-    await db.resume_versions.insert_one(current_version_doc)
+    current_version_doc = ResumeVersion(
+        id=uuid.uuid4(),
+        resume_id=resume.id,
+        version=resume.version,
+        title=resume.title,
+        template=resume.template,
+        data=resume.data,
+        created_at=resume.updated_at
+    )
+    db.add(current_version_doc)
     
     # Restore the old version
-    now = datetime.now(timezone.utc).isoformat()
-    await db.resumes.update_one(
-        {"id": resume_id},
-        {"$set": {
-            "title": version_doc["title"],
-            "template": version_doc["template"],
-            "data": version_doc["data"],
-            "version": resume.get("version", 1) + 1,
-            "updated_at": now
-        }}
-    )
+    now = datetime.now(timezone.utc)
+    resume.title = version_doc.title
+    resume.template = version_doc.template
+    resume.data = version_doc.data
+    resume.version = resume.version + 1
+    resume.updated_at = now
+    
+    await db.commit()
     
     return {"message": f"Resume restored to version {version}"}
 
@@ -773,11 +938,22 @@ Return only the bullet points, no explanations."""
     return {"enhanced_text": response}
 
 @api_router.post("/ai/ats-optimize")
-async def optimize_for_ats(request: ATSOptimizeRequest, current_user: dict = Depends(get_current_user)):
-    if not current_user.get("is_premium", False):
+async def optimize_for_ats(request: ATSOptimizeRequest, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    if not current_user.is_premium:
         raise HTTPException(status_code=403, detail="Premium subscription required")
     
-    resume = await db.resumes.find_one({"id": request.resume_id, "user_id": current_user["id"]}, {"_id": 0})
+    try:
+        resume_uuid = uuid.UUID(request.resume_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid resume ID format")
+    
+    result = await db.execute(
+        select(Resume).where(
+            and_(Resume.id == resume_uuid, Resume.user_id == current_user.id)
+        )
+    )
+    resume = result.scalar_one_or_none()
+    
     if not resume:
         raise HTTPException(status_code=404, detail="Resume not found")
     
@@ -790,7 +966,7 @@ Job Description:
 {request.job_description}
 
 Resume Data:
-{resume['data']}
+{resume.data}
 
 Respond in JSON format:
 {{
@@ -804,21 +980,30 @@ Respond in JSON format:
     
     try:
         import json
-        result = json.loads(response)
-        await db.resumes.update_one(
-            {"id": request.resume_id},
-            {"$set": {"ats_score": result.get("score", 0)}}
-        )
-        return result
+        result_data = json.loads(response)
+        resume.ats_score = result_data.get("score", 0)
+        await db.commit()
+        return result_data
     except:
         return {"raw_response": response}
 
 @api_router.post("/ai/tailor-resume")
-async def tailor_resume(request: ATSOptimizeRequest, current_user: dict = Depends(get_current_user)):
-    if not current_user.get("is_premium", False):
+async def tailor_resume(request: ATSOptimizeRequest, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    if not current_user.is_premium:
         raise HTTPException(status_code=403, detail="Premium subscription required")
     
-    resume = await db.resumes.find_one({"id": request.resume_id, "user_id": current_user["id"]}, {"_id": 0})
+    try:
+        resume_uuid = uuid.UUID(request.resume_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid resume ID format")
+    
+    result = await db.execute(
+        select(Resume).where(
+            and_(Resume.id == resume_uuid, Resume.user_id == current_user.id)
+        )
+    )
+    resume = result.scalar_one_or_none()
+    
     if not resume:
         raise HTTPException(status_code=404, detail="Resume not found")
     
@@ -832,7 +1017,7 @@ Job Description:
 {request.job_description}
 
 Current Resume:
-{resume['data']}
+{resume.data}
 
 Respond in JSON format:
 {{
@@ -853,8 +1038,8 @@ Respond in JSON format:
         return {"raw_response": response}
 
 @api_router.post("/ai/improve-text")
-async def improve_text(request: AIRequest, current_user: dict = Depends(get_current_user)):
-    if not current_user.get("is_premium", False):
+async def improve_text(request: AIRequest, current_user: User = Depends(get_current_user)):
+    if not current_user.is_premium:
         raise HTTPException(status_code=403, detail="Premium subscription required")
     
     prompt = f"""Improve this resume text to be more impactful and professional:
@@ -875,9 +1060,9 @@ Return only the improved text."""
     return {"improved_text": response}
 
 @api_router.post("/ai/generate-summary")
-async def generate_summary(request: SummaryGenerateRequest, current_user: dict = Depends(get_current_user)):
+async def generate_summary(request: SummaryGenerateRequest, current_user: User = Depends(get_current_user)):
     """Generate a professional summary based on experiences and skills"""
-    if not current_user.get("is_premium", False):
+    if not current_user.is_premium:
         raise HTTPException(status_code=403, detail="Premium subscription required")
     
     tone_instructions = {
@@ -910,9 +1095,9 @@ Return only the summary text, no explanations."""
     return {"summary": response}
 
 @api_router.post("/ai/suggest-skills")
-async def suggest_skills(request: SkillsSuggestRequest, current_user: dict = Depends(get_current_user)):
+async def suggest_skills(request: SkillsSuggestRequest, current_user: User = Depends(get_current_user)):
     """Suggest relevant skills based on job title and industry"""
-    if not current_user.get("is_premium", False):
+    if not current_user.is_premium:
         raise HTTPException(status_code=403, detail="Premium subscription required")
     
     prompt = f"""Suggest relevant skills for a resume based on:
@@ -942,19 +1127,30 @@ Respond in JSON format:
         return {"raw_response": response}
 
 @api_router.post("/ai/generate-cover-letter")
-async def generate_cover_letter(request: CoverLetterRequest, current_user: dict = Depends(get_current_user)):
+async def generate_cover_letter(request: CoverLetterRequest, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     """Generate a cover letter based on resume and job description"""
-    if not current_user.get("is_premium", False):
+    if not current_user.is_premium:
         raise HTTPException(status_code=403, detail="Premium subscription required")
     
-    resume = await db.resumes.find_one({"id": request.resume_id, "user_id": current_user["id"]}, {"_id": 0})
+    try:
+        resume_uuid = uuid.UUID(request.resume_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid resume ID format")
+    
+    result = await db.execute(
+        select(Resume).where(
+            and_(Resume.id == resume_uuid, Resume.user_id == current_user.id)
+        )
+    )
+    resume = result.scalar_one_or_none()
+    
     if not resume:
         raise HTTPException(status_code=404, detail="Resume not found")
     
     prompt = f"""Generate a professional cover letter based on:
 
 Resume Data:
-{resume['data']}
+{resume.data}
 
 Company: {request.company_name}
 Job Description: {request.job_description}
@@ -1786,17 +1982,21 @@ async def get_public_resume_pdf(slug: str, password: str = None):
 async def root():
     return {"message": "VitaeCraft API", "version": "1.1.0"}
 
-# Include router and middleware
+@app.options("/{full_path:path}")
+async def preflight_handler(full_path: str):
+    """Handle CORS preflight requests"""
+    return {"status": "ok"}
+
+# Include router
 app.include_router(api_router)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_credentials=True,
-    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# Database initialization on startup
+@app.on_event("startup")
+async def startup():
+    await init_db()
+    print("✅ Database initialized on startup")
 
 @app.on_event("shutdown")
-async def shutdown_db_client():
-    client.close()
+async def shutdown():
+    print("🛑 Shutting down VitaeCraft API")
+
