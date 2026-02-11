@@ -3,6 +3,7 @@ PostgreSQL Database Configuration and Session Management
 """
 
 import os
+import ssl
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import declarative_base
 from sqlalchemy import event
@@ -14,12 +15,25 @@ DATABASE_URL = os.environ.get(
     'postgresql+asyncpg://neelam@localhost:5432/vitaecraft'
 )
 
-# Create async engine
-engine = create_async_engine(
-    DATABASE_URL,
-    echo=False,  # Set to True for SQL logging
-    poolclass=NullPool,  # Better for serverless (Vercel)
-)
+# Remove ?sslmode=require if present (asyncpg doesn't accept it as query param)
+if '?sslmode=require' in DATABASE_URL:
+    DATABASE_URL = DATABASE_URL.replace('?sslmode=require', '')
+
+# Create async engine with SSL support for asyncpg
+engine_kwargs = {
+    'echo': False,  # Set to True for SQL logging
+    'poolclass': NullPool,  # Better for serverless (Render)
+}
+
+# Add SSL context for async connections to Neon
+if 'neon.tech' in DATABASE_URL:
+    # Create SSL context for secure connection to Neon
+    ssl_context = ssl.create_default_context()
+    ssl_context.check_hostname = True
+    ssl_context.verify_mode = ssl.CERT_REQUIRED
+    engine_kwargs['connect_args'] = {'ssl': ssl_context}
+
+engine = create_async_engine(DATABASE_URL, **engine_kwargs)
 
 # Session factory
 async_session = async_sessionmaker(
