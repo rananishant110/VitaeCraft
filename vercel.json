@@ -1,18 +1,6 @@
 {
   "buildCommand": "cd frontend && npm run build",
   "outputDirectory": "frontend/build",
-  "env": {
-    "DATABASE_URL": "@database_url",
-    "DB_NAME": "vitaecraft_prod",
-    "OPENAI_API_KEY": "@openai_api_key",
-    "STRIPE_API_KEY": "@stripe_api_key",
-    "STRIPE_WEBHOOK_SECRET": "@stripe_webhook_secret",
-    "JWT_SECRET": "@jwt_secret",
-    "RESEND_API_KEY": "@resend_api_key",
-    "SENDER_EMAIL": "@sender_email",
-    "FRONTEND_URL": "@frontend_url",
-    "CORS_ORIGINS": "@cors_origins"
-  },
   "rewrites": [
     {
       "source": "/api/(.*)",
