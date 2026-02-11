@@ -133,8 +133,35 @@ class ResumeAnalytics(Base):
     resume_id = Column(UUID(as_uuid=True), ForeignKey("resumes.id"), unique=True, nullable=False, index=True)
     view_count = Column(Integer, default=0)
     download_count = Column(Integer, default=0)
-    last_viewed_at = Column(DateTime(timezone=True), nullable=True)
+    ats_score_history = Column(JSON, default=[])
+    last_viewed = Column(DateTime(timezone=True), nullable=True)
+    last_downloaded = Column(DateTime(timezone=True), nullable=True)
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
     # Relationships
     resume = relationship("Resume", back_populates="analytics")
+
+
+class UserPreferences(Base):
+    """User Preferences (theme, etc.)"""
+    __tablename__ = "user_preferences"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), unique=True, nullable=False, index=True)
+    theme = Column(String(20), default="light")
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
+class PublicResume(Base):
+    """Public Resume Sharing"""
+    __tablename__ = "public_resumes"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    resume_id = Column(UUID(as_uuid=True), ForeignKey("resumes.id"), unique=True, nullable=False, index=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
+    slug = Column(String(255), unique=True, nullable=False, index=True)
+    password_hash = Column(String(255), nullable=True)
+    is_password_protected = Column(Boolean, default=False)
+    view_count = Column(Integer, default=0)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
