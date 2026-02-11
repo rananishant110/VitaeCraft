@@ -3,7 +3,7 @@ from fastapi.responses import StreamingResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, and_, or_
+from sqlalchemy import select, func, and_, or_, update, delete
 import os
 import logging
 import asyncio
@@ -29,7 +29,7 @@ import resend
 from database import get_db, init_db, engine
 from models import (
     User, Resume, ResumeVersion, CoverLetter, PasswordReset, 
-    PaymentTransaction, ResumeAnalytics
+    PaymentTransaction, ResumeAnalytics, UserPreferences, PublicResume
 )
 
 ROOT_DIR = Path(__file__).parent
@@ -65,11 +65,15 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 # Create the main app
 app = FastAPI()
 
+# Get CORS origins from environment
+CORS_ORIGINS = os.environ.get('CORS_ORIGINS', 'http://localhost:3000').split(',')
+CORS_ORIGINS = [origin.strip() for origin in CORS_ORIGINS]  # Clean whitespace
+
 # Add CORS middleware FIRST (before routes)
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=["http://localhost:3000", "http://localhost:8000", os.environ.get('FRONTEND_URL', '*')],
+    allow_origins=CORS_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -1172,65 +1176,153 @@ Return only the cover letter text."""
 # ============== COVER LETTER ROUTES ==============
 
 @api_router.post("/cover-letters", response_model=CoverLetterResponse)
-async def create_cover_letter(data: CoverLetterCreate, current_user: dict = Depends(get_current_user)):
-    cover_letter_id = str(uuid.uuid4())
-    now = datetime.now(timezone.utc).isoformat()
+async def create_cover_letter(data: CoverLetterCreate, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    cover_letter_id = uuid.uuid4()
+    now = datetime.now(timezone.utc)
     
-    doc = {
-        "id": cover_letter_id,
-        "user_id": current_user["id"],
-        "resume_id": data.resume_id,
-        "title": data.title,
-        "content": data.content,
-        "company_name": data.company_name,
-        "job_description": data.job_description,
-        "created_at": now,
-        "updated_at": now
-    }
+    try:
+        resume_uuid = uuid.UUID(data.resume_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid resume ID format")
     
-    await db.cover_letters.insert_one(doc)
-    return CoverLetterResponse(**doc)
+    cover_letter = CoverLetter(
+        id=cover_letter_id,
+        user_id=current_user.id,
+        resume_id=resume_uuid,
+        title=data.title,
+        content=data.content,
+        company_name=data.company_name,
+        job_description=data.job_description,
+        created_at=now,
+        updated_at=now
+    )
+    
+    db.add(cover_letter)
+    await db.commit()
+    await db.refresh(cover_letter)
+    
+    return CoverLetterResponse(
+        id=str(cover_letter.id),
+        user_id=str(cover_letter.user_id),
+        resume_id=str(cover_letter.resume_id),
+        title=cover_letter.title,
+        content=cover_letter.content,
+        company_name=cover_letter.company_name,
+        job_description=cover_letter.job_description,
+        created_at=cover_letter.created_at.isoformat(),
+        updated_at=cover_letter.updated_at.isoformat()
+    )
 
 @api_router.get("/cover-letters", response_model=List[CoverLetterResponse])
-async def get_cover_letters(current_user: dict = Depends(get_current_user)):
-    letters = await db.cover_letters.find(
-        {"user_id": current_user["id"]},
-        {"_id": 0}
-    ).to_list(100)
-    return letters
+async def get_cover_letters(current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(CoverLetter).where(CoverLetter.user_id == current_user.id).order_by(CoverLetter.created_at.desc())
+    )
+    letters = result.scalars().all()
+    
+    return [
+        CoverLetterResponse(
+            id=str(letter.id),
+            user_id=str(letter.user_id),
+            resume_id=str(letter.resume_id) if letter.resume_id else None,
+            title=letter.title,
+            content=letter.content,
+            company_name=letter.company_name,
+            job_description=letter.job_description,
+            created_at=letter.created_at.isoformat(),
+            updated_at=letter.updated_at.isoformat()
+        )
+        for letter in letters
+    ]
 
 @api_router.get("/cover-letters/{letter_id}", response_model=CoverLetterResponse)
-async def get_cover_letter(letter_id: str, current_user: dict = Depends(get_current_user)):
-    letter = await db.cover_letters.find_one(
-        {"id": letter_id, "user_id": current_user["id"]},
-        {"_id": 0}
+async def get_cover_letter(letter_id: str, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    try:
+        letter_uuid = uuid.UUID(letter_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid cover letter ID format")
+    
+    result = await db.execute(
+        select(CoverLetter).where(
+            and_(CoverLetter.id == letter_uuid, CoverLetter.user_id == current_user.id)
+        )
     )
+    letter = result.scalar_one_or_none()
+    
     if not letter:
         raise HTTPException(status_code=404, detail="Cover letter not found")
-    return letter
+    
+    return CoverLetterResponse(
+        id=str(letter.id),
+        user_id=str(letter.user_id),
+        resume_id=str(letter.resume_id) if letter.resume_id else None,
+        title=letter.title,
+        content=letter.content,
+        company_name=letter.company_name,
+        job_description=letter.job_description,
+        created_at=letter.created_at.isoformat(),
+        updated_at=letter.updated_at.isoformat()
+    )
 
 @api_router.put("/cover-letters/{letter_id}", response_model=CoverLetterResponse)
-async def update_cover_letter(letter_id: str, update: CoverLetterUpdate, current_user: dict = Depends(get_current_user)):
-    letter = await db.cover_letters.find_one({"id": letter_id, "user_id": current_user["id"]})
+async def update_cover_letter(letter_id: str, update: CoverLetterUpdate, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    try:
+        letter_uuid = uuid.UUID(letter_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid cover letter ID format")
+    
+    result = await db.execute(
+        select(CoverLetter).where(
+            and_(CoverLetter.id == letter_uuid, CoverLetter.user_id == current_user.id)
+        )
+    )
+    letter = result.scalar_one_or_none()
+    
     if not letter:
         raise HTTPException(status_code=404, detail="Cover letter not found")
     
-    update_data = {"updated_at": datetime.now(timezone.utc).isoformat()}
     if update.title is not None:
-        update_data["title"] = update.title
+        letter.title = update.title
     if update.content is not None:
-        update_data["content"] = update.content
+        letter.content = update.content
     
-    await db.cover_letters.update_one({"id": letter_id}, {"$set": update_data})
+    letter.updated_at = datetime.now(timezone.utc)
     
-    updated = await db.cover_letters.find_one({"id": letter_id}, {"_id": 0})
-    return updated
+    await db.commit()
+    await db.refresh(letter)
+    
+    return CoverLetterResponse(
+        id=str(letter.id),
+        user_id=str(letter.user_id),
+        resume_id=str(letter.resume_id) if letter.resume_id else None,
+        title=letter.title,
+        content=letter.content,
+        company_name=letter.company_name,
+        job_description=letter.job_description,
+        created_at=letter.created_at.isoformat(),
+        updated_at=letter.updated_at.isoformat()
+    )
 
 @api_router.delete("/cover-letters/{letter_id}")
-async def delete_cover_letter(letter_id: str, current_user: dict = Depends(get_current_user)):
-    result = await db.cover_letters.delete_one({"id": letter_id, "user_id": current_user["id"]})
-    if result.deleted_count == 0:
+async def delete_cover_letter(letter_id: str, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    try:
+        letter_uuid = uuid.UUID(letter_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid cover letter ID format")
+    
+    result = await db.execute(
+        select(CoverLetter).where(
+            and_(CoverLetter.id == letter_uuid, CoverLetter.user_id == current_user.id)
+        )
+    )
+    letter = result.scalar_one_or_none()
+    
+    if not letter:
         raise HTTPException(status_code=404, detail="Cover letter not found")
+    
+    await db.delete(letter)
+    await db.commit()
+    
     return {"message": "Cover letter deleted"}
 
 # ============== PDF GENERATION ==============
@@ -1451,24 +1543,43 @@ def generate_minimalist_pdf(resume_data: dict) -> io.BytesIO:
     return buffer
 
 @api_router.get("/resumes/{resume_id}/pdf")
-async def generate_pdf(resume_id: str, current_user: dict = Depends(get_current_user)):
-    resume = await db.resumes.find_one({"id": resume_id, "user_id": current_user["id"]}, {"_id": 0})
+async def generate_pdf(resume_id: str, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    try:
+        resume_uuid = uuid.UUID(resume_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid resume ID format")
+    
+    result = await db.execute(
+        select(Resume).where(
+            and_(Resume.id == resume_uuid, Resume.user_id == current_user.id)
+        )
+    )
+    resume = result.scalar_one_or_none()
+    
     if not resume:
         raise HTTPException(status_code=404, detail="Resume not found")
     
-    template = resume.get('template', 'professional')
+    # Convert to dict format for PDF generation
+    resume_data = {
+        "id": str(resume.id),
+        "title": resume.title,
+        "template": resume.template,
+        "data": resume.data
+    }
+    
+    template = resume.template
     
     if template == 'modern':
-        pdf_buffer = generate_modern_pdf(resume)
+        pdf_buffer = generate_modern_pdf(resume_data)
     elif template == 'minimalist':
-        pdf_buffer = generate_minimalist_pdf(resume)
+        pdf_buffer = generate_minimalist_pdf(resume_data)
     else:
-        pdf_buffer = generate_professional_pdf(resume)
+        pdf_buffer = generate_professional_pdf(resume_data)
     
     # Track download analytics
-    await track_resume_event(resume_id, "download")
+    await track_resume_event(resume_id, "download", db)
     
-    filename = f"{resume.get('title', 'resume').replace(' ', '_')}.pdf"
+    filename = f"{resume.title.replace(' ', '_')}.pdf"
     
     return StreamingResponse(
         pdf_buffer,
@@ -1479,22 +1590,54 @@ async def generate_pdf(resume_id: str, current_user: dict = Depends(get_current_
 # ============== EXPORT ROUTES ==============
 
 @api_router.get("/resumes/{resume_id}/export/json")
-async def export_resume_json(resume_id: str, current_user: dict = Depends(get_current_user)):
+async def export_resume_json(resume_id: str, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     """Export resume data as JSON for backup"""
-    resume = await db.resumes.find_one({"id": resume_id, "user_id": current_user["id"]}, {"_id": 0})
+    try:
+        resume_uuid = uuid.UUID(resume_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid resume ID format")
+    
+    result = await db.execute(
+        select(Resume).where(
+            and_(Resume.id == resume_uuid, Resume.user_id == current_user.id)
+        )
+    )
+    resume = result.scalar_one_or_none()
+    
     if not resume:
         raise HTTPException(status_code=404, detail="Resume not found")
     
-    return resume
+    return {
+        "id": str(resume.id),
+        "user_id": str(resume.user_id),
+        "title": resume.title,
+        "template": resume.template,
+        "data": resume.data,
+        "ats_score": resume.ats_score,
+        "version": resume.version,
+        "created_at": resume.created_at.isoformat(),
+        "updated_at": resume.updated_at.isoformat()
+    }
 
 @api_router.get("/resumes/{resume_id}/export/txt")
-async def export_resume_txt(resume_id: str, current_user: dict = Depends(get_current_user)):
+async def export_resume_txt(resume_id: str, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     """Export resume as plain text"""
-    resume = await db.resumes.find_one({"id": resume_id, "user_id": current_user["id"]}, {"_id": 0})
+    try:
+        resume_uuid = uuid.UUID(resume_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid resume ID format")
+    
+    result = await db.execute(
+        select(Resume).where(
+            and_(Resume.id == resume_uuid, Resume.user_id == current_user.id)
+        )
+    )
+    resume = result.scalar_one_or_none()
+    
     if not resume:
         raise HTTPException(status_code=404, detail="Resume not found")
     
-    data = resume.get('data', {})
+    data = resume.data
     personal = data.get('personal_info', {})
     
     lines = []
@@ -1541,7 +1684,7 @@ async def export_resume_txt(resume_id: str, current_user: dict = Depends(get_cur
 # ============== PAYMENT ROUTES ==============
 
 @api_router.post("/payments/create-checkout")
-async def create_checkout(request: PaymentRequest, http_request: Request, current_user: dict = Depends(get_current_user)):
+async def create_checkout(request: PaymentRequest, http_request: Request, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     if request.plan not in PRICING:
         raise HTTPException(status_code=400, detail="Invalid plan selected")
     
@@ -1572,31 +1715,30 @@ async def create_checkout(request: PaymentRequest, http_request: Request, curren
         success_url=success_url,
         cancel_url=cancel_url,
         metadata={
-            "user_id": current_user["id"],
+            "user_id": str(current_user.id),
             "plan": request.plan,
-            "email": current_user["email"],
+            "email": current_user.email,
         },
     )
     
-    transaction = {
-        "id": str(uuid.uuid4()),
-        "session_id": session.id,
-        "user_id": current_user["id"],
-        "email": current_user["email"],
-        "amount": amount,
-        "currency": "usd",
-        "plan": request.plan,
-        "status": "pending",
-        "payment_status": "initiated",
-        "created_at": datetime.now(timezone.utc).isoformat()
-    }
+    transaction = PaymentTransaction(
+        id=uuid.uuid4(),
+        session_id=session.id,
+        user_id=current_user.id,
+        amount=amount,
+        plan=request.plan,
+        status="pending",
+        payment_status="pending",
+        created_at=datetime.now(timezone.utc)
+    )
     
-    await db.payment_transactions.insert_one(transaction)
+    db.add(transaction)
+    await db.commit()
     
     return {"url": session.url, "session_id": session.id}
 
 @api_router.get("/payments/status/{session_id}")
-async def get_payment_status(session_id: str, current_user: dict = Depends(get_current_user)):
+async def get_payment_status(session_id: str, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     stripe_api_key = os.environ.get('STRIPE_API_KEY')
     if not stripe_api_key:
         raise HTTPException(status_code=500, detail="STRIPE_API_KEY is not set")
@@ -1604,32 +1746,31 @@ async def get_payment_status(session_id: str, current_user: dict = Depends(get_c
     
     session = stripe_sdk.checkout.Session.retrieve(session_id)
     
-    transaction = await db.payment_transactions.find_one({"session_id": session_id})
+    result = await db.execute(
+        select(PaymentTransaction).where(PaymentTransaction.session_id == session_id)
+    )
+    transaction = result.scalar_one_or_none()
     
     if transaction and session.payment_status == "paid":
-        if transaction.get("payment_status") != "paid":
-            await db.payment_transactions.update_one(
-                {"session_id": session_id},
-                {"$set": {
-                    "status": "complete",
-                    "payment_status": "paid",
-                    "completed_at": datetime.now(timezone.utc).isoformat()
-                }}
-            )
+        if transaction.payment_status != "paid":
+            transaction.status = "completed"
+            transaction.payment_status = "complete"
+            transaction.completed_at = datetime.now(timezone.utc)
             
-            plan = transaction.get("plan", "lifetime")
-            await db.users.update_one(
-                {"id": current_user["id"]},
-                {"$set": {
-                    "is_premium": True,
-                    "subscription_type": plan
-                }}
+            # Update user premium status
+            result = await db.execute(
+                select(User).where(User.id == current_user.id)
             )
+            user = result.scalar_one_or_none()
+            if user:
+                user.is_premium = True
+                user.subscription_type = transaction.plan
+            
+            await db.commit()
     elif transaction and session.status == "expired":
-        await db.payment_transactions.update_one(
-            {"session_id": session_id},
-            {"$set": {"status": "expired", "payment_status": "expired"}}
-        )
+        transaction.status = "expired"
+        transaction.payment_status = "expired"
+        await db.commit()
     
     return {
         "status": session.status,
@@ -1639,16 +1780,33 @@ async def get_payment_status(session_id: str, current_user: dict = Depends(get_c
     }
 
 @api_router.get("/payments/history")
-async def get_payment_history(current_user: dict = Depends(get_current_user)):
+async def get_payment_history(current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     """Get user's payment history"""
-    transactions = await db.payment_transactions.find(
-        {"user_id": current_user["id"]},
-        {"_id": 0}
-    ).sort("created_at", -1).to_list(50)
-    return transactions
+    result = await db.execute(
+        select(PaymentTransaction)
+        .where(PaymentTransaction.user_id == current_user.id)
+        .order_by(PaymentTransaction.created_at.desc())
+        .limit(50)
+    )
+    transactions = result.scalars().all()
+    
+    return [
+        {
+            "id": str(t.id),
+            "session_id": t.session_id,
+            "user_id": str(t.user_id),
+            "amount": t.amount,
+            "plan": t.plan,
+            "status": t.status,
+            "payment_status": t.payment_status,
+            "created_at": t.created_at.isoformat(),
+            "completed_at": t.completed_at.isoformat() if t.completed_at else None
+        }
+        for t in transactions
+    ]
 
 @api_router.post("/webhook/stripe")
-async def stripe_webhook(request: Request):
+async def stripe_webhook(request: Request, db: AsyncSession = Depends(get_db)):
     body = await request.body()
     signature = request.headers.get("Stripe-Signature")
     
@@ -1665,28 +1823,27 @@ async def stripe_webhook(request: Request):
         if event.get("type") == "checkout.session.completed":
             session = event["data"]["object"]
             session_id = session.get("id")
-            transaction = await db.payment_transactions.find_one({"session_id": session_id})
             
-            if transaction and transaction.get("payment_status") != "paid":
-                await db.payment_transactions.update_one(
-                    {"session_id": session_id},
-                    {"$set": {
-                        "status": "complete",
-                        "payment_status": "paid",
-                        "completed_at": datetime.now(timezone.utc).isoformat()
-                    }}
-                )
+            result = await db.execute(
+                select(PaymentTransaction).where(PaymentTransaction.session_id == session_id)
+            )
+            transaction = result.scalar_one_or_none()
+            
+            if transaction and transaction.payment_status != "complete":
+                transaction.status = "completed"
+                transaction.payment_status = "complete"
+                transaction.completed_at = datetime.now(timezone.utc)
                 
-                user_id = transaction.get("user_id")
-                plan = transaction.get("plan", "lifetime")
-                
-                await db.users.update_one(
-                    {"id": user_id},
-                    {"$set": {
-                        "is_premium": True,
-                        "subscription_type": plan
-                    }}
+                # Update user premium status
+                result = await db.execute(
+                    select(User).where(User.id == transaction.user_id)
                 )
+                user = result.scalar_one_or_none()
+                if user:
+                    user.is_premium = True
+                    user.subscription_type = transaction.plan
+                
+                await db.commit()
         
         return {"received": True}
     except Exception as e:
@@ -1696,7 +1853,7 @@ async def stripe_webhook(request: Request):
 # ============== LINKEDIN IMPORT (COMING SOON) ==============
 
 @api_router.post("/linkedin/import")
-async def import_linkedin(request: LinkedInImportRequest, current_user: dict = Depends(get_current_user)):
+async def import_linkedin(request: LinkedInImportRequest, current_user: User = Depends(get_current_user)):
     """
     LinkedIn Import - COMING SOON
     This feature requires LinkedIn OAuth integration which needs LinkedIn Developer approval.
@@ -1710,89 +1867,140 @@ async def import_linkedin(request: LinkedInImportRequest, current_user: dict = D
 # ============== P3: USER PREFERENCES (DARK MODE) ==============
 
 @api_router.get("/user/preferences")
-async def get_user_preferences(current_user: dict = Depends(get_current_user)):
+async def get_user_preferences(current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     """Get user preferences including theme"""
-    prefs = await db.user_preferences.find_one({"user_id": current_user["id"]}, {"_id": 0})
+    result = await db.execute(
+        select(UserPreferences).where(UserPreferences.user_id == current_user.id)
+    )
+    prefs = result.scalar_one_or_none()
+    
     if not prefs:
-        prefs = {"user_id": current_user["id"], "theme": "light"}
-    return prefs
+        return {"user_id": str(current_user.id), "theme": "light"}
+    
+    return {
+        "id": str(prefs.id),
+        "user_id": str(prefs.user_id),
+        "theme": prefs.theme
+    }
 
 @api_router.put("/user/preferences")
-async def update_user_preferences(data: UserPreferencesUpdate, current_user: dict = Depends(get_current_user)):
+async def update_user_preferences(data: UserPreferencesUpdate, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     """Update user preferences (theme, etc.)"""
-    update_data = {}
     if data.theme:
         if data.theme not in ["light", "dark"]:
             raise HTTPException(status_code=400, detail="Theme must be 'light' or 'dark'")
-        update_data["theme"] = data.theme
     
-    if update_data:
-        await db.user_preferences.update_one(
-            {"user_id": current_user["id"]},
-            {"$set": update_data},
-            upsert=True
+    result = await db.execute(
+        select(UserPreferences).where(UserPreferences.user_id == current_user.id)
+    )
+    prefs = result.scalar_one_or_none()
+    
+    if not prefs:
+        # Create new preferences
+        prefs = UserPreferences(
+            id=uuid.uuid4(),
+            user_id=current_user.id,
+            theme=data.theme or "light",
+            created_at=datetime.now(timezone.utc)
         )
+        db.add(prefs)
+    else:
+        # Update existing preferences
+        if data.theme:
+            prefs.theme = data.theme
+        prefs.updated_at = datetime.now(timezone.utc)
     
-    prefs = await db.user_preferences.find_one({"user_id": current_user["id"]}, {"_id": 0})
-    return prefs
+    await db.commit()
+    await db.refresh(prefs)
+    
+    return {
+        "id": str(prefs.id),
+        "user_id": str(prefs.user_id),
+        "theme": prefs.theme
+    }
 
 # ============== P3: RESUME ANALYTICS ==============
 
 @api_router.get("/resumes/{resume_id}/analytics", response_model=ResumeAnalyticsResponse)
-async def get_resume_analytics(resume_id: str, current_user: dict = Depends(get_current_user)):
+async def get_resume_analytics(resume_id: str, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     """Get analytics for a specific resume"""
-    resume = await db.resumes.find_one({"id": resume_id, "user_id": current_user["id"]}, {"_id": 0})
+    try:
+        resume_uuid = uuid.UUID(resume_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid resume ID format")
+    
+    result = await db.execute(
+        select(Resume).where(
+            and_(Resume.id == resume_uuid, Resume.user_id == current_user.id)
+        )
+    )
+    resume = result.scalar_one_or_none()
+    
     if not resume:
         raise HTTPException(status_code=404, detail="Resume not found")
     
-    analytics = await db.resume_analytics.find_one({"resume_id": resume_id}, {"_id": 0})
-    if not analytics:
-        analytics = {
-            "resume_id": resume_id,
-            "title": resume["title"],
-            "view_count": 0,
-            "download_count": 0,
-            "ats_score_history": [],
-            "last_viewed": None,
-            "last_downloaded": None
-        }
-    else:
-        # Ensure all required fields are present
-        analytics["title"] = resume["title"]
-        analytics["view_count"] = analytics.get("view_count", 0)
-        analytics["download_count"] = analytics.get("download_count", 0)
-        analytics["ats_score_history"] = analytics.get("ats_score_history", [])
-        analytics["last_viewed"] = analytics.get("last_viewed")
-        analytics["last_downloaded"] = analytics.get("last_downloaded")
+    result = await db.execute(
+        select(ResumeAnalytics).where(ResumeAnalytics.resume_id == resume_uuid)
+    )
+    analytics = result.scalar_one_or_none()
     
-    return analytics
+    if not analytics:
+        return ResumeAnalyticsResponse(
+            resume_id=resume_id,
+            title=resume.title,
+            view_count=0,
+            download_count=0,
+            ats_score_history=[],
+            last_viewed=None,
+            last_downloaded=None
+        )
+    
+    return ResumeAnalyticsResponse(
+        resume_id=resume_id,
+        title=resume.title,
+        view_count=analytics.view_count,
+        download_count=analytics.download_count,
+        ats_score_history=analytics.ats_score_history or [],
+        last_viewed=analytics.last_viewed.isoformat() if analytics.last_viewed else None,
+        last_downloaded=analytics.last_downloaded.isoformat() if analytics.last_downloaded else None
+    )
 
 @api_router.get("/analytics/dashboard")
-async def get_analytics_dashboard(current_user: dict = Depends(get_current_user)):
+async def get_analytics_dashboard(current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     """Get analytics overview for all user's resumes"""
-    resumes = await db.resumes.find(
-        {"user_id": current_user["id"]},
-        {"_id": 0, "id": 1, "title": 1}
-    ).to_list(100)
+    result = await db.execute(
+        select(Resume.id, Resume.title)
+        .where(Resume.user_id == current_user.id)
+    )
+    resumes = result.all()
     
     analytics_list = []
     total_views = 0
     total_downloads = 0
     
-    for resume in resumes:
-        analytics = await db.resume_analytics.find_one({"resume_id": resume["id"]}, {"_id": 0})
+    for resume_id, title in resumes:
+        result = await db.execute(
+            select(ResumeAnalytics).where(ResumeAnalytics.resume_id == resume_id)
+        )
+        analytics = result.scalar_one_or_none()
+        
         if analytics:
-            analytics["title"] = resume["title"]
-            total_views += analytics.get("view_count", 0)
-            total_downloads += analytics.get("download_count", 0)
+            analytics_dict = {
+                "resume_id": str(resume_id),
+                "title": title,
+                "view_count": analytics.view_count,
+                "download_count": analytics.download_count
+            }
+            total_views += analytics.view_count
+            total_downloads += analytics.download_count
         else:
-            analytics = {
-                "resume_id": resume["id"],
-                "title": resume["title"],
+            analytics_dict = {
+                "resume_id": str(resume_id),
+                "title": title,
                 "view_count": 0,
                 "download_count": 0
             }
-        analytics_list.append(analytics)
+        analytics_list.append(analytics_dict)
     
     return {
         "total_resumes": len(resumes),
@@ -1801,44 +2009,68 @@ async def get_analytics_dashboard(current_user: dict = Depends(get_current_user)
         "resumes": analytics_list
     }
 
-async def track_resume_event(resume_id: str, event_type: str, ats_score: int = None):
+async def track_resume_event(resume_id: str, event_type: str, db: AsyncSession, ats_score: int = None):
     """Helper to track resume events"""
-    now = datetime.now(timezone.utc).isoformat()
+    try:
+        resume_uuid = uuid.UUID(resume_id)
+    except ValueError:
+        return
     
-    update_ops = {}
-    if event_type == "view":
-        update_ops = {
-            "$inc": {"view_count": 1},
-            "$set": {"last_viewed": now}
-        }
-    elif event_type == "download":
-        update_ops = {
-            "$inc": {"download_count": 1},
-            "$set": {"last_downloaded": now}
-        }
-    elif event_type == "ats_score" and ats_score is not None:
-        update_ops = {
-            "$push": {"ats_score_history": {"score": ats_score, "date": now}}
-        }
+    now = datetime.now(timezone.utc)
     
-    if update_ops:
-        await db.resume_analytics.update_one(
-            {"resume_id": resume_id},
-            {**update_ops, "$setOnInsert": {"resume_id": resume_id}},
-            upsert=True
+    # Get or create analytics record
+    result = await db.execute(
+        select(ResumeAnalytics).where(ResumeAnalytics.resume_id == resume_uuid)
+    )
+    analytics = result.scalar_one_or_none()
+    
+    if not analytics:
+        analytics = ResumeAnalytics(
+            id=uuid.uuid4(),
+            resume_id=resume_uuid,
+            view_count=0,
+            download_count=0,
+            ats_score_history=[]
         )
+        db.add(analytics)
+    
+    if event_type == "view":
+        analytics.view_count += 1
+        analytics.last_viewed = now
+    elif event_type == "download":
+        analytics.download_count += 1
+        analytics.last_downloaded = now
+    elif event_type == "ats_score" and ats_score is not None:
+        if analytics.ats_score_history is None:
+            analytics.ats_score_history = []
+        analytics.ats_score_history.append({"score": ats_score, "date": now.isoformat()})
+    
+    analytics.updated_at = now
+    await db.commit()
 
 # ============== P3: PUBLIC RESUME SHARING ==============
 
 @api_router.post("/resumes/{resume_id}/share", response_model=PublicResumeResponse)
-async def create_public_share(resume_id: str, data: PublicResumeCreate, current_user: dict = Depends(get_current_user)):
+async def create_public_share(resume_id: str, data: PublicResumeCreate, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     """Create a public shareable link for a resume"""
-    resume = await db.resumes.find_one({"id": resume_id, "user_id": current_user["id"]})
+    try:
+        resume_uuid = uuid.UUID(resume_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid resume ID format")
+    
+    # Check if resume exists and belongs to user
+    result = await db.execute(
+        select(Resume).where(and_(Resume.id == resume_uuid, Resume.user_id == current_user.id))
+    )
+    resume = result.scalar_one_or_none()
     if not resume:
         raise HTTPException(status_code=404, detail="Resume not found")
     
     # Check if share already exists
-    existing = await db.public_resumes.find_one({"resume_id": resume_id})
+    result = await db.execute(
+        select(PublicResume).where(PublicResume.resume_id == resume_uuid)
+    )
+    existing = result.scalar_one_or_none()
     if existing:
         raise HTTPException(status_code=400, detail="Resume already has a public link. Delete it first to create a new one.")
     
@@ -1849,114 +2081,168 @@ async def create_public_share(resume_id: str, data: PublicResumeCreate, current_
             raise HTTPException(status_code=400, detail="Slug must be 3-50 characters")
         slug = data.custom_slug.lower().replace(" ", "-")
         # Check uniqueness
-        slug_exists = await db.public_resumes.find_one({"slug": slug})
+        result = await db.execute(
+            select(PublicResume).where(PublicResume.slug == slug)
+        )
+        slug_exists = result.scalar_one_or_none()
         if slug_exists:
             raise HTTPException(status_code=400, detail="This slug is already taken")
     else:
         slug = secrets.token_urlsafe(8)
     
-    share_doc = {
-        "id": str(uuid.uuid4()),
-        "resume_id": resume_id,
-        "user_id": current_user["id"],
-        "slug": slug,
-        "password_hash": get_password_hash(data.password) if data.password else None,
-        "is_password_protected": bool(data.password),
-        "view_count": 0,
-        "created_at": datetime.now(timezone.utc).isoformat()
-    }
+    public_resume = PublicResume(
+        id=uuid.uuid4(),
+        resume_id=resume_uuid,
+        user_id=current_user.id,
+        slug=slug,
+        password_hash=pwd_context.hash(data.password) if data.password else None,
+        is_password_protected=bool(data.password),
+        view_count=0,
+        created_at=datetime.now(timezone.utc)
+    )
     
-    await db.public_resumes.insert_one(share_doc)
+    db.add(public_resume)
+    await db.commit()
+    await db.refresh(public_resume)
     
     return PublicResumeResponse(
-        id=share_doc["id"],
-        resume_id=resume_id,
-        user_id=current_user["id"],
-        slug=slug,
-        is_password_protected=share_doc["is_password_protected"],
-        view_count=0,
-        created_at=share_doc["created_at"]
+        id=str(public_resume.id),
+        resume_id=str(public_resume.resume_id),
+        user_id=str(public_resume.user_id),
+        slug=public_resume.slug,
+        is_password_protected=public_resume.is_password_protected,
+        view_count=public_resume.view_count,
+        created_at=public_resume.created_at.isoformat()
     )
 
 @api_router.get("/resumes/{resume_id}/share")
-async def get_share_info(resume_id: str, current_user: dict = Depends(get_current_user)):
+async def get_share_info(resume_id: str, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     """Get public share info for a resume"""
-    resume = await db.resumes.find_one({"id": resume_id, "user_id": current_user["id"]})
+    try:
+        resume_uuid = uuid.UUID(resume_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid resume ID format")
+    
+    # Check if resume exists and belongs to user
+    result = await db.execute(
+        select(Resume).where(and_(Resume.id == resume_uuid, Resume.user_id == current_user.id))
+    )
+    resume = result.scalar_one_or_none()
     if not resume:
         raise HTTPException(status_code=404, detail="Resume not found")
     
-    share = await db.public_resumes.find_one({"resume_id": resume_id}, {"_id": 0, "password_hash": 0})
+    # Get share info
+    result = await db.execute(
+        select(PublicResume).where(PublicResume.resume_id == resume_uuid)
+    )
+    share = result.scalar_one_or_none()
     if not share:
         return {"shared": False}
     
     frontend_url = os.environ.get('FRONTEND_URL', 'http://localhost:3000')
-    share["shared"] = True
-    share["public_url"] = f"{frontend_url}/r/{share['slug']}"
-    return share
+    return {
+        "shared": True,
+        "id": str(share.id),
+        "resume_id": str(share.resume_id),
+        "user_id": str(share.user_id),
+        "slug": share.slug,
+        "is_password_protected": share.is_password_protected,
+        "view_count": share.view_count,
+        "created_at": share.created_at.isoformat(),
+        "public_url": f"{frontend_url}/r/{share.slug}"
+    }
 
 @api_router.delete("/resumes/{resume_id}/share")
-async def delete_public_share(resume_id: str, current_user: dict = Depends(get_current_user)):
+async def delete_public_share(resume_id: str, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     """Remove public sharing for a resume"""
-    resume = await db.resumes.find_one({"id": resume_id, "user_id": current_user["id"]})
+    try:
+        resume_uuid = uuid.UUID(resume_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid resume ID format")
+    
+    # Check if resume exists and belongs to user
+    result = await db.execute(
+        select(Resume).where(and_(Resume.id == resume_uuid, Resume.user_id == current_user.id))
+    )
+    resume = result.scalar_one_or_none()
     if not resume:
         raise HTTPException(status_code=404, detail="Resume not found")
     
-    result = await db.public_resumes.delete_one({"resume_id": resume_id})
-    if result.deleted_count == 0:
+    # Delete share
+    result = await db.execute(
+        select(PublicResume).where(PublicResume.resume_id == resume_uuid)
+    )
+    share = result.scalar_one_or_none()
+    if not share:
         raise HTTPException(status_code=404, detail="No public link found")
+    
+    await db.delete(share)
+    await db.commit()
     
     return {"message": "Public link removed"}
 
 @api_router.get("/public/resume/{slug}")
-async def get_public_resume(slug: str, password: str = None):
+async def get_public_resume(slug: str, password: str = None, db: AsyncSession = Depends(get_db)):
     """View a public resume (no auth required)"""
-    share = await db.public_resumes.find_one({"slug": slug})
+    result = await db.execute(
+        select(PublicResume).where(PublicResume.slug == slug)
+    )
+    share = result.scalar_one_or_none()
     if not share:
         raise HTTPException(status_code=404, detail="Resume not found")
     
     # Check password if protected
-    if share.get("is_password_protected"):
+    if share.is_password_protected:
         if not password:
             return {"password_required": True}
-        if not verify_password(password, share["password_hash"]):
+        if not pwd_context.verify(password, share.password_hash):
             raise HTTPException(status_code=401, detail="Invalid password")
     
-    resume = await db.resumes.find_one({"id": share["resume_id"]}, {"_id": 0})
+    # Get resume
+    result = await db.execute(
+        select(Resume).where(Resume.id == share.resume_id)
+    )
+    resume = result.scalar_one_or_none()
     if not resume:
         raise HTTPException(status_code=404, detail="Resume not found")
     
     # Track view
-    await db.public_resumes.update_one(
-        {"slug": slug},
-        {"$inc": {"view_count": 1}}
-    )
-    await track_resume_event(share["resume_id"], "view")
+    share.view_count += 1
+    await db.commit()
+    await track_resume_event(str(share.resume_id), "view", db)
     
     # Return resume data (excluding user_id for privacy)
     return {
-        "title": resume["title"],
-        "template": resume["template"],
-        "data": resume["data"]
+        "title": resume.title,
+        "template": resume.template,
+        "data": resume.data
     }
 
 @api_router.get("/public/resume/{slug}/pdf")
-async def get_public_resume_pdf(slug: str, password: str = None):
+async def get_public_resume_pdf(slug: str, password: str = None, db: AsyncSession = Depends(get_db)):
     """Download public resume as PDF"""
-    share = await db.public_resumes.find_one({"slug": slug})
+    result = await db.execute(
+        select(PublicResume).where(PublicResume.slug == slug)
+    )
+    share = result.scalar_one_or_none()
     if not share:
         raise HTTPException(status_code=404, detail="Resume not found")
     
-    if share.get("is_password_protected"):
+    if share.is_password_protected:
         if not password:
             raise HTTPException(status_code=401, detail="Password required")
-        if not verify_password(password, share["password_hash"]):
+        if not pwd_context.verify(password, share.password_hash):
             raise HTTPException(status_code=401, detail="Invalid password")
     
-    resume = await db.resumes.find_one({"id": share["resume_id"]}, {"_id": 0})
+    # Get resume
+    result = await db.execute(
+        select(Resume).where(Resume.id == share.resume_id)
+    )
+    resume = result.scalar_one_or_none()
     if not resume:
         raise HTTPException(status_code=404, detail="Resume not found")
     
-    template = resume.get('template', 'professional')
+    template = resume.template or 'professional'
     
     if template == 'modern':
         pdf_buffer = generate_modern_pdf(resume)
