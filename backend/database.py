@@ -6,7 +6,7 @@ import os
 import ssl
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import declarative_base
-from sqlalchemy import event
+from sqlalchemy import event, text
 from sqlalchemy.pool import NullPool
 
 # Database URL
@@ -61,6 +61,35 @@ async def init_db():
     """Initialize database tables"""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        
+        # Run schema migrations for existing tables
+        await conn.execute(text("""
+            -- Add missing columns to resume_analytics if they don't exist
+            DO $$ 
+            BEGIN
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                              WHERE table_name='resume_analytics' AND column_name='ats_score_history') THEN
+                    ALTER TABLE resume_analytics ADD COLUMN ats_score_history JSONB DEFAULT '[]';
+                END IF;
+                
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                              WHERE table_name='resume_analytics' AND column_name='last_viewed') THEN
+                    ALTER TABLE resume_analytics ADD COLUMN last_viewed TIMESTAMP WITH TIME ZONE;
+                END IF;
+                
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                              WHERE table_name='resume_analytics' AND column_name='last_downloaded') THEN
+                    ALTER TABLE resume_analytics ADD COLUMN last_downloaded TIMESTAMP WITH TIME ZONE;
+                END IF;
+                
+                -- Drop old column if it exists
+                IF EXISTS (SELECT 1 FROM information_schema.columns 
+                          WHERE table_name='resume_analytics' AND column_name='last_viewed_at') THEN
+                    ALTER TABLE resume_analytics DROP COLUMN last_viewed_at;
+                END IF;
+            END $$;
+        """))
+        
     print("✅ Database tables created/verified")
 
 
